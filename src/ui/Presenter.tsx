@@ -4,6 +4,9 @@ import { fitView, type PaperMode, type View } from "../render/draw";
 import { usedStages, type Steps } from "../lesson/reveal";
 import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
 import { IconButton } from "./icons";
+import { drawLasers, laserAlpha, type LaserStroke } from "../render/laser";
+import { useSettings } from "./settings";
+import { SettingsPanel } from "./SettingsPanel";
 
 interface Props {
   doc: CanvasDoc;
@@ -71,9 +74,45 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
   const anim = useRef(0);
   const downAt = useRef<{ x: number; y: number } | null>(null);
   const limit = pos === 0 ? 0 : steps[pos - 1];
+  const settings = useSettings();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Laser: a stylus always draws it; laserOn lets a finger or mouse draw it too.
+  const [laserOn, setLaserOn] = useState(false);
+  const lasers = useRef<LaserStroke[]>([]);
+  const drawing = useRef<LaserStroke | null>(null);
+  const [, setLaserTick] = useState(0);
+  const laserLoop = useRef(0);
+  const holdMs = settings.laserSeconds * 1000;
+
+  const runLaser = useCallback(() => {
+    if (laserLoop.current) return;
+    const tick = () => {
+      const now = performance.now();
+      lasers.current = lasers.current.filter((s) => laserAlpha(s, now, holdMs) > 0);
+      setLaserTick((t) => t + 1);
+      laserLoop.current = lasers.current.length ? requestAnimationFrame(tick) : 0;
+    };
+    laserLoop.current = requestAnimationFrame(tick);
+  }, [holdMs]);
+
+  // Keep the tablet's screen on while presenting.
+  useEffect(() => {
+    type WakeNav = Navigator & { wakeLock?: { request(t: "screen"): Promise<{ release(): Promise<void> }> } };
+    let lock: { release(): Promise<void> } | null = null;
+    const acquire = () => {
+      if (document.visibilityState === "visible") (navigator as WakeNav).wakeLock?.request("screen").then((l) => (lock = l)).catch(() => {});
+    };
+    acquire();
+    document.addEventListener("visibilitychange", acquire);
+    return () => {
+      document.removeEventListener("visibilitychange", acquire);
+      void lock?.release().catch(() => {});
+      cancelAnimationFrame(laserLoop.current);
+    };
+  }, []);
 
   const overview = useMemo(() => (size.w > 0 ? fitView(doc.bounds, size.w, size.h, M, TOP, BOTTOM) : null), [doc, size]);
-  const follow = !!overview && overview.zoom < READABLE_ZOOM;
+  const follow = !!overview && settings.cameraFollow && overview.zoom < READABLE_ZOOM;
 
   /** Where the camera should be to show step [p], moving as little as possible from [cur]. */
   const viewFor = useCallback(
@@ -216,6 +255,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
         case "f": case "F": toggleFullscreen(); break;
         case "o": case "O": showOverview(); break;
         case "l": case "L": setZoomLocked((z) => !z); break;
+        case "p": case "P": setLaserOn((on) => !on); break;
         case "+": case "=": zoomBy(ZOOM_STEP); break;
         case "-": case "_": zoomBy(1 / ZOOM_STEP); break;
         case "Escape": if (!isFullscreen()) onExit?.(); break;
@@ -236,9 +276,35 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
           setView(v);
         }}
         onSize={(w, h) => setSize({ w, h })}
-        onDown={(c) => (downAt.current = { x: c.event.clientX, y: c.event.clientY })}
-        onCancel={() => (downAt.current = null)}
+        onDown={(c) => {
+          setSettingsOpen(false);
+          if (c.event.pointerType === "pen" || laserOn) {
+            drawing.current = { pts: [[c.x, c.y]], liftedAt: null, color: settings.laserColor };
+            lasers.current.push(drawing.current);
+            runLaser();
+            return;
+          }
+          downAt.current = { x: c.event.clientX, y: c.event.clientY };
+        }}
+        onMove={(c) => {
+          const s = drawing.current;
+          if (!s) return;
+          const [lx, ly] = s.pts[s.pts.length - 1];
+          if (Math.hypot(c.x - lx, c.y - ly) / c.scale >= 1.5) s.pts.push([c.x, c.y]);
+          runLaser();
+        }}
+        onCancel={() => {
+          downAt.current = null;
+          if (drawing.current) drawing.current.liftedAt = performance.now();
+          drawing.current = null;
+        }}
         onUp={(c) => {
+          if (drawing.current) {
+            drawing.current.liftedAt = performance.now();
+            drawing.current = null;
+            runLaser();
+            return;
+          }
           const d = downAt.current;
           downAt.current = null;
           if (!d || Math.hypot(c.event.clientX - d.x, c.event.clientY - d.y) > 8) return;
@@ -247,11 +313,16 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
           if (c.event.clientX - r.left < r.width / 4) prev();
           else next();
         }}
-        cursor={hudVisible ? "default" : "none"}
-        options={{ paper, visible: (it) => stageOf(it) <= limit }}
+        cursor={laserOn ? "crosshair" : hudVisible ? "default" : "none"}
+        options={{
+          paper,
+          visible: (it) => stageOf(it) <= limit,
+          overlay: (ctx, v) => drawLasers(ctx, v, lasers.current, performance.now(), holdMs),
+        }}
       />
+      {settingsOpen && <SettingsPanel scope="present" onClose={() => setSettingsOpen(false)} />}
       {caption && <div className="caption">{caption}</div>}
-      <nav className={"hud" + (hudVisible ? "" : " hidden")} onPointerDown={(e) => e.stopPropagation()}>
+      <nav className={"hud" + (hudVisible || settingsOpen ? "" : " hidden")} onPointerDown={(e) => e.stopPropagation()}>
         {onExit && <IconButton icon="close" onClick={onExit} title="Back to editing (Esc)" />}
         <IconButton icon="prev" onClick={prev} disabled={pos === 0} title="Previous (←)" />
         <div className="dots" title={`${pos} of ${steps.length} steps shown`}>
@@ -279,7 +350,15 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
             <IconButton icon="next" className="rot90" onClick={() => goPage(1)} disabled={pageIndex === pages.length - 1} title="Next page (Shift+→)" />
           </>
         )}
+        <span className="sep" />
+        <IconButton
+          icon="pen"
+          active={laserOn}
+          onClick={() => setLaserOn((on) => !on)}
+          title={laserOn ? "Laser on: draw to point, it fades (P)" : "Laser pen for finger/mouse (P). A stylus always draws the laser."}
+        />
         <IconButton icon="fullscreen" onClick={toggleFullscreen} title="Full screen (F)" />
+        <IconButton icon="gear" active={settingsOpen} onClick={() => setSettingsOpen((o) => !o)} title="Settings" />
       </nav>
     </div>
   );

@@ -38,15 +38,97 @@ export function pickAt(doc: CanvasDoc, x: number, y: number, tol: number, visibl
   return null;
 }
 
-/** Box test on real geometry: a stroke counts when at least 60% of its points are inside, so a tail
- *  poking out doesn't exclude it and a neighbour barely clipped isn't grabbed. */
-export function itemInBox(it: CanvasItem, r: Bounds): boolean {
+type Pt = [number, number];
+
+/** What an item draws, as polylines, and how far its ink spreads either side of them. */
+function drawnOf(it: CanvasItem): { lines: { pts: Pt[]; closed: boolean }[]; reach: number } {
+  if (it.kind === "stroke") {
+    const c = it.ribbon.centers;
+    const pts: Pt[] = [];
+    for (let i = 0; i < c.length; i += 2) pts.push([c[i], c[i + 1]]);
+    let reach = it.dashed ? it.dashed.width / 2 : 0;
+    for (const h of it.ribbon.halfWidths) if (h > reach) reach = h;
+    return { lines: [{ pts, closed: false }], reach };
+  }
+  if (it.kind === "shape") {
+    if (it.ellipse) {
+      const e = it.ellipse;
+      const cx = (e.minX + e.maxX) / 2, cy = (e.minY + e.maxY) / 2, rx = (e.maxX - e.minX) / 2, ry = (e.maxY - e.minY) / 2;
+      const pts: Pt[] = Array.from({ length: 32 }, (_, k) => [cx + rx * Math.cos((k / 32) * 2 * Math.PI), cy + ry * Math.sin((k / 32) * 2 * Math.PI)]);
+      return { lines: [{ pts, closed: true }], reach: it.width / 2 };
+    }
+    return { lines: [{ pts: it.points ?? [], closed: it.closed }], reach: it.width / 2 };
+  }
   const b = it.bounds;
-  if (b.maxX < r.minX || b.minX > r.maxX || b.maxY < r.minY || b.minY > r.maxY) return false;
-  if (it.kind !== "stroke") return inBounds(r, (b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, 0);
-  const c = it.ribbon.centers;
-  const n = c.length / 2;
-  let inside = 0;
-  for (let i = 0; i < n; i++) if (inBounds(r, c[2 * i], c[2 * i + 1], 0)) inside++;
-  return inside >= 0.6 * n;
+  return { lines: [{ pts: [[b.minX, b.minY], [b.maxX, b.minY], [b.maxX, b.maxY], [b.minX, b.maxY]], closed: true }], reach: 0 };
 }
+
+function pointInPolygon(poly: Pt[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function segmentsCross(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
+  const o = (p: Pt, q: Pt, r: Pt) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+  return o(a, b, c) !== o(a, b, d) && o(c, d, a) !== o(c, d, b);
+}
+
+function segSegDist(a: Pt, b: Pt, c: Pt, d: Pt): number {
+  if (segmentsCross(a, b, c, d)) return 0;
+  return Math.min(
+    distToSegment(a[0], a[1], c[0], c[1], d[0], d[1])[0],
+    distToSegment(b[0], b[1], c[0], c[1], d[0], d[1])[0],
+    distToSegment(c[0], c[1], a[0], a[1], b[0], b[1])[0],
+    distToSegment(d[0], d[1], a[0], a[1], b[0], b[1])[0],
+  );
+}
+
+/**
+ * XNotes' selection rule (canvas/SelectionMath.kt), shared by the lasso and the box: an item is in
+ * when the closed ring touches what the item draws (its ink, a shape's outline, a box's frame) or
+ * goes all the way round it.
+ */
+export function ringMembers(items: CanvasItem[], ring: Pt[]): CanvasItem[] {
+  if (ring.length < 3) return [];
+  const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  for (const [x, y] of ring) {
+    box.minX = Math.min(box.minX, x); box.minY = Math.min(box.minY, y);
+    box.maxX = Math.max(box.maxX, x); box.maxY = Math.max(box.maxY, y);
+  }
+  const n = ring.length;
+  return items.filter((it) => {
+    const b = it.bounds;
+    if (b.maxX < box.minX || b.minX > box.maxX || b.maxY < box.minY || b.minY > box.maxY) return false;
+    const { lines, reach } = drawnOf(it);
+    // A line starting inside is in; one starting outside must cross or touch an edge near the item.
+    for (const l of lines) if (l.pts.length && pointInPolygon(ring, l.pts[0][0], l.pts[0][1])) return true;
+    const near: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const a = ring[i];
+      const c = ring[(i + 1) % n];
+      if (Math.min(a[0], c[0]) <= b.maxX && Math.max(a[0], c[0]) >= b.minX && Math.min(a[1], c[1]) <= b.maxY && Math.max(a[1], c[1]) >= b.minY) near.push(i);
+    }
+    if (!near.length) return false;
+    for (const l of lines) {
+      const v = l.pts;
+      if (v.length === 1) {
+        if (near.some((e) => distToSegment(v[0][0], v[0][1], ring[e][0], ring[e][1], ring[(e + 1) % n][0], ring[(e + 1) % n][1])[0] <= reach)) return true;
+        continue;
+      }
+      const segs = l.closed ? v.length : v.length - 1;
+      for (let k = 0; k < segs; k++) {
+        const p = v[k];
+        const q = v[(k + 1) % v.length];
+        for (const e of near) if (segSegDist(p, q, ring[e], ring[(e + 1) % n]) <= reach) return true;
+      }
+    }
+    return false;
+  });
+}
+
+export const boxRing = (r: Bounds): Pt[] => [[r.minX, r.minY], [r.maxX, r.minY], [r.maxX, r.maxY], [r.minX, r.maxY]];

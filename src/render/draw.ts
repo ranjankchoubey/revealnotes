@@ -282,7 +282,13 @@ export interface RenderOptions {
   /** Item under the pointer, outlined in [accent]. */
   hover?: CanvasItem | null;
   marquee?: Bounds | null;
+  /** Freehand lasso loop being drawn, content coordinates. */
+  lasso?: [number, number][] | null;
+  /** Items to call out (e.g. new since the steps were saved): dashed frame. */
+  flagged?: (it: CanvasItem) => boolean;
   accent?: Rgba;
+  /** Drawn last, in content coordinates (the presenter's laser). */
+  overlay?: (ctx: CanvasRenderingContext2D, view: View) => void;
   onAsset?: () => void;
 }
 
@@ -332,6 +338,33 @@ export function render(ctx: CanvasRenderingContext2D, o: RenderOptions) {
     ctx.restore();
   }
   for (const it of o.doc.items) if (onScreen(it)) drawItem(ctx, o.doc, it, onAsset);
+  if (o.flagged) {
+    const pad = 6 / view.zoom;
+    ctx.save();
+    ctx.lineWidth = 2 / view.zoom;
+    ctx.setLineDash([6 / view.zoom, 4 / view.zoom]);
+    ctx.strokeStyle = "rgba(255,140,0,0.95)";
+    for (const it of o.doc.items) {
+      if (!onScreen(it) || !o.flagged(it)) continue;
+      const b = it.bounds;
+      ctx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + 2 * pad, b.maxY - b.minY + 2 * pad);
+    }
+    ctx.restore();
+  }
+  if (o.lasso && o.lasso.length > 1) {
+    const a = o.accent ?? [255, 170, 0, 255];
+    ctx.save();
+    ctx.beginPath();
+    o.lasso.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.fillStyle = css(a, 0.1);
+    ctx.fill();
+    ctx.lineWidth = 1.5 / view.zoom;
+    ctx.setLineDash([5 / view.zoom, 4 / view.zoom]);
+    ctx.strokeStyle = css(a, 0.95);
+    ctx.stroke();
+    ctx.restore();
+  }
   if (o.marquee) {
     const m = o.marquee;
     const a = o.accent ?? [255, 170, 0, 255];
@@ -344,6 +377,7 @@ export function render(ctx: CanvasRenderingContext2D, o: RenderOptions) {
     ctx.strokeRect(m.minX, m.minY, m.maxX - m.minX, m.maxY - m.minY);
     ctx.restore();
   }
+  o.overlay?.(ctx, view);
 }
 
 /** View that fits [b] into a w×h viewport with a margin, plus extra room for overlaid bars. */

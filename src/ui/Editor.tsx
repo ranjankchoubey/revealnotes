@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Bounds, CanvasDoc, CanvasItem, Rgba } from "../format/xcanvas";
 import { fitView, type PaperMode, type View } from "../render/draw";
-import { itemInBox, pickAt } from "../render/hit";
+import { boxRing, pickAt, ringMembers } from "../render/hit";
 import { compactStages, usedStages, type Steps } from "../lesson/reveal";
 import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
 import { Icon, IconButton } from "./icons";
 import { useMedia } from "./useMedia";
+import { setSettings, useSettings } from "./settings";
+import { SettingsPanel } from "./SettingsPanel";
 
 const STEP_COLORS: Rgba[] = [
   [255, 99, 132, 255], [54, 214, 140, 255], [77, 163, 255, 255], [255, 177, 66, 255], [180, 120, 255, 255],
@@ -34,6 +36,9 @@ interface Props {
   onPresent: () => void;
   onClose: () => void;
   onDismissNotice: () => void;
+  /** IDs new or changed since the steps were saved, outlined until assigned. */
+  fresh: Set<string>;
+  onSeen: (ids: string[]) => void;
 }
 
 export function Editor(p: Props) {
@@ -56,7 +61,13 @@ export function Editor(p: Props) {
   }, [p.notice, doc]);
   // Wide screens (laptop, landscape tablet) fit everything in one bar; narrow ones dock the steps at the bottom.
   const wide = useMedia("(min-width: 1100px)");
-  const drag = useRef<{ x: number; y: number; moved: boolean; hit: CanvasItem | null } | null>(null);
+  const settings = useSettings();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [lasso, setLasso] = useState<[number, number][] | null>(null);
+  // Once a stylus is used (auto mode), the pen selects and a finger pans, like XNotes.
+  const [penSeen, setPenSeen] = useState(false);
+  const fingerPans = settings.stylus === "always" || (settings.stylus === "auto" && penSeen);
+  const drag = useRef<{ x: number; y: number; moved: boolean; hit: CanvasItem | null; ring: [number, number][] } | null>(null);
 
   const steps = useMemo(() => {
     const s = new Set(usedStages(stages));
@@ -116,6 +127,7 @@ export function Editor(p: Props) {
     const turnOff = toggle && active !== 0 && items.every((it) => stageOf(it) === active);
     for (const it of items) next.set(idOf.get(it)!, turnOff ? 0 : active);
     commit(next, names, active, true);
+    p.onSeen(items.map((it) => idOf.get(it)!));
   };
 
   useEffect(() => {
@@ -224,19 +236,34 @@ export function Editor(p: Props) {
           />
         </div>
         <div className="group">
+          <IconButton
+            icon={settings.selectTool}
+            onClick={() => setSettings({ selectTool: settings.selectTool === "lasso" ? "box" : "lasso" })}
+            title={settings.selectTool === "lasso" ? "Selecting with lasso (tap for box)" : "Selecting with box (tap for lasso)"}
+          />
           <IconButton icon="undo" onClick={p.onUndo} disabled={!p.canUndo} title="Undo (⌘/Ctrl+Z)" />
-          <IconButton icon={p.paper === "dark" ? "sun" : "moon"} onClick={() => p.onPaper(p.paper === "dark" ? "light" : "dark")} title={p.paper === "dark" ? "Light mode" : "Dark mode"} />
           <IconButton icon={saveIcon} label={saveLabel} className={p.saveState === "unsaved" ? "attn" : ""} onClick={p.onSave} title="Save steps (⌘/Ctrl+S)" />
-          <IconButton icon="export" label="Export" onClick={p.onExport} title="Export one HTML file that presents anywhere, offline" />
+          <IconButton icon="gear" active={settingsOpen} onClick={() => setSettingsOpen((o) => !o)} title="Settings, export, load steps" />
         </div>
         <IconButton icon="play" label="Present" className="primary" onClick={p.onPresent} title="Present (P)" />
       </header>
+      {settingsOpen && (
+        <SettingsPanel
+          scope="edit"
+          onClose={() => setSettingsOpen(false)}
+          paper={p.paper}
+          onPaper={p.onPaper}
+          onLoadSteps={() => { setSettingsOpen(false); p.onLoadSteps(); }}
+          onExport={() => { setSettingsOpen(false); p.onExport(); }}
+        />
+      )}
 
       <div className="stage">
         <CanvasView
           doc={doc}
           view={view}
           zoomLocked={zoomLocked}
+          fingerPans={fingerPans}
           onView={(v) => {
             userMoved.current = true;
             setView(v);
@@ -245,7 +272,9 @@ export function Editor(p: Props) {
           cursor={hover ? "pointer" : "crosshair"}
           onDown={(c) => {
             setListOpen(false);
-            drag.current = { x: c.x, y: c.y, moved: false, hit: pickAt(doc, c.x, c.y, 5 * c.scale) };
+            setSettingsOpen(false);
+            if (c.event.pointerType === "pen") setPenSeen(true);
+            drag.current = { x: c.x, y: c.y, moved: false, hit: pickAt(doc, c.x, c.y, 5 * c.scale), ring: [[c.x, c.y]] };
           }}
           onMove={(c) => {
             const d = drag.current;
@@ -256,19 +285,32 @@ export function Editor(p: Props) {
             if (!d.moved && Math.hypot(c.x - d.x, c.y - d.y) / c.scale < 4) return;
             d.moved = true;
             setHover(null);
-            setBox(rect(d, c));
+            if (settings.selectTool === "box") {
+              setBox(rect(d, c));
+              return;
+            }
+            const [lx, ly] = d.ring[d.ring.length - 1];
+            // Decimate by on-screen spacing like XNotes (LASSO_MIN_STEP_PX = 3).
+            if (Math.hypot(c.x - lx, c.y - ly) / c.scale >= 3) {
+              d.ring.push([c.x, c.y]);
+              setLasso([...d.ring]);
+            }
           }}
           onUp={(c) => {
             const d = drag.current;
             drag.current = null;
             setBox(null);
+            setLasso(null);
             if (!d) return;
-            if (d.moved) apply(doc.items.filter((it) => itemInBox(it, rect(d, c))), false);
-            else if (d.hit) apply([d.hit], true);
+            if (d.moved) {
+              const ring = settings.selectTool === "box" ? boxRing(rect(d, c)) : [...d.ring, [c.x, c.y] as [number, number]];
+              apply(ringMembers(doc.items, ring), false);
+            } else if (d.hit) apply([d.hit], true);
           }}
           onCancel={() => {
             drag.current = null;
             setBox(null);
+            setLasso(null);
           }}
           onLeave={() => setHover(null)}
           options={{
@@ -282,6 +324,8 @@ export function Editor(p: Props) {
             },
             hover,
             marquee: box,
+            lasso,
+            flagged: p.fresh.size ? (it) => p.fresh.has(idOf.get(it)!) : undefined,
             accent: stepColor(active),
           }}
         />
@@ -293,7 +337,7 @@ export function Editor(p: Props) {
         )}
         {!assignedAny && (
           <div className="hint">
-            Pick a step, then tap strokes or drag a box around them.{" "}
+            Pick a step, then tap strokes or draw a loop around them.{" "}
             <button className="link" onClick={p.onLoadSteps}>Have a .reveal.json? Load it</button>
           </div>
         )}

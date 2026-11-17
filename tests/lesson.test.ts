@@ -4,6 +4,8 @@ import { strToU8, unzipSync, zipSync } from "fflate";
 import { loadDocument, loadXCanvas } from "../src/format/xcanvas";
 import { objectIds } from "../src/lesson/ids";
 import { applyReveal, compactStages, newLesson, serializeReveal } from "../src/lesson/reveal";
+import { ringMembers } from "../src/render/hit";
+import { revealNameFor } from "../src/lesson/storage";
 
 describe("compactStages", () => {
   test("closes gaps, names follow their step, active step kept even when empty", () => {
@@ -42,7 +44,6 @@ describe("xnote (synthetic, built from the sample's strokes)", () => {
     // Same stroke on two pages must still get distinct ids.
     const ids = objectIds(doc);
     expect(new Set(ids).size).toBe(3);
-    expect(doc.warnings.some((w) => w.includes("experimental"))).toBe(true);
   });
 });
 
@@ -59,7 +60,48 @@ describe("xnote (real file from XNotes)", () => {
     expect(rect.points!.length).toBe(4);
     expect(tri.points!.length).toBe(3);
     expect(tri.closed).toBe(true);
-    expect(doc.warnings).toEqual(["Notebook (.xnote) support is experimental. Please compare with XNotes."]);
+    expect(doc.warnings).toEqual([]);
+  });
+});
+
+describe("notes edited after marking steps", () => {
+  test("a moved stroke keeps its step, a new stroke is reported, an erased one is missing", async () => {
+    const doc = await loadXCanvas("untitled_1.xcanvas", new Uint8Array(readFileSync(SAMPLE)));
+    const ids = objectIds(doc);
+    const lesson = newLesson(ids);
+    ids.forEach((id, i) => lesson.stages.set(id, (i % 3) + 1));
+    const saved = JSON.parse(JSON.stringify(serializeReveal(doc, ids, lesson, true)));
+
+    const edited = await loadXCanvas("untitled_1.xcanvas", rezip((m) => {
+      // Item 2 moved 300 px right (as XNotes' lasso move does); item 5 erased; one brand-new stroke.
+      const moved = m.items[2] as { samples: number[][] };
+      moved.samples = moved.samples.map(([x, y, p]) => [+(x + 300).toFixed(2), y, p]);
+      m.items.splice(5, 1);
+      const extra = JSON.parse(JSON.stringify(m.items[0])) as { samples: number[][] };
+      extra.samples = extra.samples.map(([x, y, p]) => [x, +(y + 900).toFixed(2), p]);
+      m.items.push(extra);
+    }));
+    const eids = objectIds(edited);
+    const { lesson: l2, report } = applyReveal(edited, eids, saved);
+    expect(report.recovered).toBe(1);
+    expect(l2.stages.get(eids[2])).toBe(lesson.stages.get(ids[2]));
+    expect(report.added).toBe(1);
+    expect(report.addedIds).toEqual([eids[eids.length - 1]]);
+    expect(report.missing).toEqual([ids[5]]);
+  });
+});
+
+describe("selection and files", () => {
+  test("lasso takes strokes it touches or encloses, not ones outside", async () => {
+    const doc = await loadXCanvas("untitled_1.xcanvas", new Uint8Array(readFileSync(SAMPLE)));
+    const b = doc.items[0].bounds;
+    const around: [number, number][] = [[b.minX - 5, b.minY - 5], [b.maxX + 5, b.minY - 5], [b.maxX + 5, b.maxY + 5], [b.minX - 5, b.maxY + 5]];
+    expect(ringMembers(doc.items, around)).toContain(doc.items[0]);
+    const far: [number, number][] = [[0, 0], [10, 0], [10, 10], [0, 10]];
+    expect(ringMembers(doc.items, far)).toEqual([]);
+  });
+  test("steps file is named after the full notes file name", () => {
+    expect(revealNameFor("lecture 3.xnote")).toBe("lecture 3.xnote.reveal.json");
   });
 });
 

@@ -28,6 +28,8 @@ interface Props {
   cursor?: string;
   /** Pinch and ⌘/Ctrl+wheel stop zooming; panning still works (as XNotes' zoom lock). */
   zoomLocked?: boolean;
+  /** Stylus mode: a single finger pans; only pen and mouse reach the tool handlers. */
+  fingerPans?: boolean;
   className?: string;
 }
 
@@ -169,7 +171,7 @@ export function CanvasView(p: Props) {
             return;
           }
           if (pointers.current.size > 2) return;
-          if (p.panMode || e.button === 1 || spaceDown.current) {
+          if (p.panMode || e.button === 1 || spaceDown.current || (p.fingerPans && e.pointerType === "touch")) {
             gesture.current = "pan";
             panLast.current = local(e);
             return;

@@ -27,7 +27,11 @@ export interface LessonSource {
 export async function openFiles(list: FileList | File[]): Promise<LessonSource> {
   const files = [...list];
   const xc = files.find((f) => /\.(xcanvas|xnote)$/i.test(f.name));
-  const js = files.find((f) => f.name.toLowerCase().endsWith(".json"));
+  const jsons = files.filter((f) => f.name.toLowerCase().endsWith(".json"));
+  // Prefer the steps file named after this notes file ("lecture.xnote.reveal.json", or a
+  // browser-renamed copy like "lecture.xnote.reveal (1).json"); else any .json given.
+  const stem = xc ? xc.name.replace(/\.(xcanvas|xnote)$/i, "").toLowerCase() : "";
+  const js = jsons.find((f) => stem && f.name.toLowerCase().startsWith(stem)) ?? jsons[0];
   if (!xc && !js) throw new Error("That isn't an XNotes file. Choose a .xcanvas or .xnote file.");
   return {
     fileName: xc?.name ?? "",
@@ -36,7 +40,8 @@ export async function openFiles(list: FileList | File[]): Promise<LessonSource> 
   };
 }
 
-export const revealNameFor = (docName: string) => docName.replace(/\.(xcanvas|xnote)$/i, "") + ".reveal.json";
+/** "lecture.xnote" -> "lecture.xnote.reveal.json": sorts right after its notes file and names it exactly. */
+export const revealNameFor = (docName: string) => `${docName}.reveal.json`;
 
 /**
  * Write the reveal file. Chromium asks where once (next to the .xcanvas), then saves silently to the

@@ -21,10 +21,11 @@ const SHARE_CACHE = "revealnotes-share";
 
 function changeNotice(r: MatchReport): string | null {
   if (!r.docChanged) return null;
-  const parts = [`${r.matched} kept their step`];
-  if (r.added) parts.push(`${r.added} new or edited set to Always`);
-  if (r.missing.length) parts.push(`${r.missing.length} saved no longer match`);
-  return `These notes changed since the steps were saved: ${parts.join(", ")}. Please check before presenting.`;
+  const kept = r.matched + r.recovered;
+  const parts = [`${kept} kept their step${r.recovered ? ` (${r.recovered} moved or touched up)` : ""}`];
+  if (r.added) parts.push(`${r.added} new, outlined in orange, start in Always`);
+  if (r.missing.length) parts.push(`${r.missing.length} erased`);
+  return `Notes changed since the steps were saved: ${parts.join("; ")}.`;
 }
 
 type LaunchWindow = Window & {
@@ -42,6 +43,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<{ text: string; document: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // Objects added or changed in the notes since the steps were saved; outlined until assigned.
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
   const fileInput = useRef<HTMLInputElement>(null);
   const stepsInput = useRef<HTMLInputElement>(null);
   // Only autosave after an edit in this tab: opening (or a stale second tab) must not overwrite a newer draft.
@@ -61,13 +64,16 @@ export function App() {
       const ids = objectIds(doc);
       let l = newLesson(ids);
       let msg: string | null = null;
-      const file = revealText ? parseReveal(revealText) : loadDraft(doc.manifestSha256);
+      let newIds: string[] = [];
+      const file = revealText ? parseReveal(revealText) : loadDraft(doc.manifestSha256, doc.fileName);
       if (file) {
         const res = applyReveal(doc, ids, file);
         l = res.lesson;
+        if (res.report.docChanged) newIds = res.report.addedIds;
         msg = changeNotice(res.report) ?? (revealText || !usedStages(l.stages).length ? null : "Restored your steps from last time.");
       }
       setPending(null);
+      setFresh(new Set(newIds));
       setLoaded({ doc, ids, bytes: src.bytes });
       edited.current = false;
       setLesson(l);
@@ -147,6 +153,7 @@ export function App() {
     try {
       const res = applyReveal(loaded.doc, loaded.ids, parseReveal(await f.text()));
       edited.current = true;
+      setFresh(new Set(res.report.docChanged ? res.report.addedIds : []));
       setHistory((h) => [...h, { stages: lesson.stages, names: lesson.names }]);
       setLesson(res.lesson);
       setSaveState("unsaved");
@@ -164,8 +171,23 @@ export function App() {
     setLesson({ ...lesson, ...next });
   };
 
+  // Presenting is a history entry, so the Android back button (or browser Back) returns to editing.
+  useEffect(() => {
+    const onPop = () => setMode("edit");
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const present = () => {
+    window.history.pushState({ presenting: true }, "");
+    setMode("present");
+  };
+  const exitPresent = () => {
+    if ((window.history.state as { presenting?: boolean } | null)?.presenting) window.history.back();
+    else setMode("edit");
+  };
+
   if (loaded && lesson && mode === "present") {
-    return <Presenter doc={loaded.doc} ids={loaded.ids} steps={lesson} paper={lesson.paper} onExit={() => setMode("edit")} />;
+    return <Presenter doc={loaded.doc} ids={loaded.ids} steps={lesson} paper={lesson.paper} onExit={exitPresent} />;
   }
 
   if (loaded && lesson) {
@@ -192,7 +214,14 @@ export function App() {
           onSave={save}
           onExport={exportHtml}
           onLoadSteps={() => stepsInput.current?.click()}
-          onPresent={() => setMode("present")}
+          onPresent={present}
+          fresh={fresh}
+          onSeen={(seen) => {
+            if (!seen.some((id) => fresh.has(id))) return;
+            const next = new Set(fresh);
+            for (const id of seen) next.delete(id);
+            setFresh(next);
+          }}
           onClose={() => {
             setLoaded(null);
             setLesson(null);

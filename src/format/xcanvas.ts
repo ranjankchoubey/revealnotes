@@ -394,7 +394,7 @@ const A4_150 = { w: (210 / 25.4) * 150, h: (297 / 25.4) * 150 };
 // XNotes' default gap between stacked pages (CanvasState side margin), content px.
 const PAGE_GAP = 48;
 
-/** Experimental: built from the XNotes DocumentCodec source, not yet tested on a real .xnote file. */
+/** Reader for .xnote notebooks, built from the XNotes DocumentCodec source. */
 function layoutPages(manifest: Record<string, unknown>, ctx: ParseCtx, warnings: string[]): PageInfo[] {
   const docStyle = (manifest.style ?? {}) as Record<string, unknown>;
   const rawPages = Array.isArray(manifest.pages) ? (manifest.pages as Record<string, unknown>[]) : [];
@@ -430,7 +430,6 @@ function layoutPages(manifest: Record<string, unknown>, ctx: ParseCtx, warnings:
   });
   if (pdfPages) warnings.push(`${pdfPages} page(s) have a PDF background, which is not shown.`);
   if (templates) warnings.push(`${templates} page(s) use a custom template, shown as plain paper.`);
-  warnings.push("Notebook (.xnote) support is experimental. Please compare with XNotes.");
   return pages;
 }
 
