@@ -56,8 +56,27 @@ export function parseReveal(text: string): RevealFile {
   return v;
 }
 
+const PAPER_KEY = "revealnotes:paper";
+
+/** The last paper the user chose (light unless they picked dark). */
+export function preferredPaper(): PaperMode {
+  try {
+    return localStorage.getItem(PAPER_KEY) === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+export function rememberPaper(p: PaperMode) {
+  try {
+    localStorage.setItem(PAPER_KEY, p);
+  } catch {
+    // Preference only.
+  }
+}
+
 export function newLesson(ids: string[]): Lesson {
-  return { stages: new Map(ids.map((id) => [id, 0])), names: new Map(), base: null, paper: "dark" };
+  return { stages: new Map(ids.map((id) => [id, 0])), names: new Map(), base: null, paper: preferredPaper() };
 }
 
 /** Apply a reveal file to the document by object ID (never by index) and report differences. */
@@ -83,7 +102,7 @@ export function applyReveal(doc: CanvasDoc, ids: string[], file: RevealFile): { 
     if (Number.isInteger(n) && n > 0 && typeof v?.name === "string" && v.name.trim()) names.set(n, v.name);
   }
   return {
-    lesson: { stages, names, base: file, paper: file.paper === "light" ? "light" : "dark" },
+    lesson: { stages, names, base: file, paper: file.paper === "dark" ? "dark" : "light" },
     report: {
       docChanged: file.manifest_sha256 !== doc.manifestSha256,
       docNameDiffers: file.document !== doc.fileName,

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Bounds, CanvasDoc, CanvasItem } from "../format/xcanvas";
 import { fitView, type PaperMode, type View } from "../render/draw";
 import { usedStages, type Steps } from "../lesson/reveal";
-import { CanvasView } from "./CanvasView";
+import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
+import { IconButton } from "./icons";
 
 interface Props {
   doc: CanvasDoc;
@@ -34,9 +35,9 @@ function toggleFullscreen() {
 // Below this zoom (CSS px per content px) the whole canvas is too small to read, so the camera follows the steps.
 const READABLE_ZOOM = 0.5;
 const MAX_FOLLOW_ZOOM = 1.5;
-const M = 32;
-const TOP = 16;
-const BOTTOM = 72;
+const M = 16;
+const TOP = 8;
+const BOTTOM = 56;
 
 function union(items: CanvasItem[]): Bounds | null {
   if (!items.length) return null;
@@ -64,6 +65,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [hudVisible, setHudVisible] = useState(true);
   const [caption, setCaption] = useState<string | null>(null);
+  const [zoomLocked, setZoomLocked] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const captionTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const anim = useRef(0);
@@ -157,6 +159,13 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
   const all = useCallback(() => setPos(steps.length), [steps]);
   const restart = useCallback(() => setPos(0), []);
   const showOverview = useCallback(() => overview && animateTo(overview), [overview, animateTo]);
+  const zoomBy = useCallback(
+    (f: number) => {
+      const v = viewRef.current;
+      if (v && !zoomLocked) animateTo(zoomAt(v, size.w / 2, size.h / 2, f));
+    },
+    [zoomLocked, animateTo, size],
+  );
 
   const pages = doc.pages && doc.pages.length > 1 ? doc.pages : null;
   const pageIndex = useMemo(() => {
@@ -206,18 +215,22 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
         case "r": case "R": restart(); break;
         case "f": case "F": toggleFullscreen(); break;
         case "o": case "O": showOverview(); break;
+        case "l": case "L": setZoomLocked((z) => !z); break;
+        case "+": case "=": zoomBy(ZOOM_STEP); break;
+        case "-": case "_": zoomBy(1 / ZOOM_STEP); break;
         case "Escape": if (!isFullscreen()) onExit?.(); break;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [next, prev, all, restart, showOverview, onExit, goPage]);
+  }, [next, prev, all, restart, showOverview, onExit, goPage, zoomBy]);
 
   return (
     <div className="presenter">
       <CanvasView
         doc={doc}
         view={view}
+        zoomLocked={zoomLocked}
         onView={(v) => {
           cancelAnimationFrame(anim.current);
           setView(v);
@@ -239,27 +252,34 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
       />
       {caption && <div className="caption">{caption}</div>}
       <nav className={"hud" + (hudVisible ? "" : " hidden")} onPointerDown={(e) => e.stopPropagation()}>
-        {onExit && <button onClick={onExit} title="Back to editing (Esc)">✕</button>}
-        <button onClick={prev} disabled={pos === 0} title="Previous (←)">‹</button>
+        {onExit && <IconButton icon="close" onClick={onExit} title="Back to editing (Esc)" />}
+        <IconButton icon="prev" onClick={prev} disabled={pos === 0} title="Previous (←)" />
         <div className="dots" title={`${pos} of ${steps.length} steps shown`}>
           {steps.length <= 24
             ? steps.map((s, i) => <span key={s} className={i < pos ? "on" : ""} onClick={() => setPos(i + 1)} title={lesson.names.get(s) ?? `Step ${s}`} />)
             : <span className="count">{pos} / {steps.length}</span>}
           {steps.length === 0 && <span className="muted">no steps</span>}
         </div>
-        <button onClick={next} disabled={pos === steps.length} title="Next (→ / Space)">›</button>
-        <button onClick={pos === steps.length ? restart : all} title={pos === steps.length ? "Restart (R)" : "Reveal all (A)"}>
-          {pos === steps.length ? "⟲" : "⏭"}
-        </button>
-        {follow && <button onClick={showOverview} title="Whole canvas (O)">⤢</button>}
+        <IconButton icon="next" onClick={next} disabled={pos === steps.length} title="Next (→ / Space)" />
+        <IconButton
+          icon={pos === steps.length ? "restart" : "revealAll"}
+          onClick={pos === steps.length ? restart : all}
+          title={pos === steps.length ? "Restart (R)" : "Reveal all (A)"}
+        />
+        <span className="sep" />
+        <IconButton icon="zoomOut" onClick={() => zoomBy(1 / ZOOM_STEP)} disabled={zoomLocked} title="Zoom out (−)" />
+        <IconButton icon="zoomIn" onClick={() => zoomBy(ZOOM_STEP)} disabled={zoomLocked} title="Zoom in (+)" />
+        <IconButton icon={zoomLocked ? "lock" : "unlock"} active={zoomLocked} onClick={() => setZoomLocked((z) => !z)} title={zoomLocked ? "Unlock zoom (L)" : "Lock zoom (L)"} />
+        <IconButton icon="fit" onClick={showOverview} title="Whole canvas (O)" />
         {pages && (
           <>
-            <button onClick={() => goPage(-1)} disabled={pageIndex === 0} title="Previous page (Shift+←)">⇡</button>
+            <span className="sep" />
+            <IconButton icon="prev" className="rot90" onClick={() => goPage(-1)} disabled={pageIndex === 0} title="Previous page (Shift+←)" />
             <span className="page">p. {pageIndex + 1}/{pages.length}</span>
-            <button onClick={() => goPage(1)} disabled={pageIndex === pages.length - 1} title="Next page (Shift+→)">⇣</button>
+            <IconButton icon="next" className="rot90" onClick={() => goPage(1)} disabled={pageIndex === pages.length - 1} title="Next page (Shift+→)" />
           </>
         )}
-        <button onClick={toggleFullscreen} title="Full screen (F)">⛶</button>
+        <IconButton icon="fullscreen" onClick={toggleFullscreen} title="Full screen (F)" />
       </nav>
     </div>
   );

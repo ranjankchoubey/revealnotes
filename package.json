@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "bun --port 5173 ./index.html",
+    "dev": "bun scripts/dev.ts",
     "build": "bun scripts/build.ts",
     "preview": "bunx serve dist -l 5174",
     "typecheck": "tsc --noEmit",

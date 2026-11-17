@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isNoteFile, loadDocument, type CanvasDoc } from "./format/xcanvas";
 import { objectIds } from "./lesson/ids";
 import {
-  applyReveal, loadDraft, newLesson, parseReveal, saveDraft, serializeReveal, usedStages,
+  applyReveal, loadDraft, newLesson, parseReveal, preferredPaper, rememberPaper, saveDraft, serializeReveal, usedStages,
   type Lesson, type MatchReport, type Steps,
 } from "./lesson/reveal";
 import { openFiles, revealNameFor, saveReveal, type SaveHandle } from "./lesson/storage";
@@ -103,6 +103,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    document.documentElement.dataset.theme = lesson?.paper ?? preferredPaper();
+  }, [lesson?.paper]);
+
+  useEffect(() => {
     if (loaded && lesson && edited.current) saveDraft(serializeReveal(loaded.doc, loaded.ids, lesson, true));
   }, [loaded, lesson]);
 
@@ -181,7 +185,10 @@ export function App() {
             update(history[history.length - 1], false);
             setHistory(history.slice(0, -1));
           }}
-          onPaper={(paper: PaperMode) => update({ paper }, false)}
+          onPaper={(paper: PaperMode) => {
+            rememberPaper(paper);
+            update({ paper }, false);
+          }}
           onSave={save}
           onExport={exportHtml}
           onLoadSteps={() => stepsInput.current?.click()}

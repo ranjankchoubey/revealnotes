@@ -1,7 +1,7 @@
 // RevealNotes service worker: offline app shell + Android share target.
 const CACHE = "revealnotes-__VERSION__";
 const SHARE_CACHE = "revealnotes-share";
-const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg", "./icon-192.png"];
+const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg", "./icon-192.png", "./player.js", "./player.css"];
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();

@@ -3,7 +3,9 @@ import type { Bounds, CanvasDoc, CanvasItem, Rgba } from "../format/xcanvas";
 import { fitView, type PaperMode, type View } from "../render/draw";
 import { itemInBox, pickAt } from "../render/hit";
 import { compactStages, usedStages, type Steps } from "../lesson/reveal";
-import { CanvasView } from "./CanvasView";
+import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
+import { Icon, IconButton } from "./icons";
+import { useMedia } from "./useMedia";
 
 const STEP_COLORS: Rgba[] = [
   [255, 99, 132, 255], [54, 214, 140, 255], [77, 163, 255, 255], [255, 177, 66, 255], [180, 120, 255, 255],
@@ -45,6 +47,15 @@ export function Editor(p: Props) {
   const [hover, setHover] = useState<CanvasItem | null>(null);
   const [box, setBox] = useState<Bounds | null>(null);
   const [listOpen, setListOpen] = useState(false);
+  const [zoomLocked, setZoomLocked] = useState(false);
+  const [noticeHidden, setNoticeHidden] = useState(false);
+  useEffect(() => {
+    setNoticeHidden(false);
+    const t = setTimeout(() => setNoticeHidden(true), 7000);
+    return () => clearTimeout(t);
+  }, [p.notice, doc]);
+  // Wide screens (laptop, landscape tablet) fit everything in one bar; narrow ones dock the steps at the bottom.
+  const wide = useMedia("(min-width: 1100px)");
   const drag = useRef<{ x: number; y: number; moved: boolean; hit: CanvasItem | null } | null>(null);
 
   const steps = useMemo(() => {
@@ -59,7 +70,7 @@ export function Editor(p: Props) {
   }, [stages]);
   const assignedAny = usedStages(stages).length > 0;
 
-  const fit = useCallback(() => size.w > 0 && setView(fitView(doc.bounds, size.w, size.h, 40, 50, 100)), [doc, size]);
+  const fit = useCallback(() => size.w > 0 && setView(fitView(doc.bounds, size.w, size.h, 16)), [doc, size]);
   // Keep the whole canvas fitted as the window resizes, until the user pans or zooms.
   const userMoved = useRef(false);
   useEffect(() => {
@@ -125,6 +136,7 @@ export function Editor(p: Props) {
       else if (k === "n" || e.key === "+") newStep();
       else if (k === "p") p.onPresent();
       else if (k === "f") { userMoved.current = false; fit(); }
+      else if (k === "l") setZoomLocked((z) => !z);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -134,137 +146,160 @@ export function Editor(p: Props) {
     minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y),
   });
 
-  const saveLabel = p.saveState === "saving" ? "Saving…" : p.saveState === "saved" ? "Saved ✓" : "Save";
+  const zoomBy = (factor: number) => {
+    if (!view || zoomLocked) return;
+    userMoved.current = true;
+    setView(zoomAt(view, size.w / 2, size.h / 2, factor));
+  };
+  const saveIcon = p.saveState === "saved" ? "check" : "save";
+  const saveLabel = p.saveState === "saving" ? "Saving…" : p.saveState === "saved" ? "Saved" : "Save";
+
+  const stepsGroup = (
+    <div className={"steps" + (wide ? "" : " docked")}>
+      {listOpen && (
+        <div className="steplist">
+          {steps.map((s) => (
+            <div key={s} className={"row" + (s === active ? " active" : "")} style={{ "--c": css(stepColor(s)) } as React.CSSProperties}>
+              <button className="dot" onClick={() => { choose(s); setListOpen(false); }} title={`Go to step ${s}`}>
+                <i /> {s}
+              </button>
+              <input
+                value={names.get(s) ?? ""}
+                placeholder={`Step ${s} name`}
+                onFocus={() => choose(s)}
+                onChange={(e) => rename(s, e.target.value)}
+              />
+              <small>{counts.get(s) ?? 0}</small>
+              {(counts.get(s) ?? 0) > 0 && (
+                <IconButton icon="trash" onClick={() => clearStep(s)} title="Move this step's strokes back to Always" />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        className={"chip" + (active === 0 ? " active" : "")}
+        style={{ "--c": css(ALWAYS) } as React.CSSProperties}
+        onClick={() => choose(0)}
+        title="Visible from the start (key 0)"
+      >
+        Always <small>{counts.get(0) ?? 0}</small>
+      </button>
+      <IconButton icon="prev" onClick={() => step(-1)} disabled={pos <= 0} title="Previous step (←)" />
+      <button
+        className={"chip current" + (active > 0 ? " active" : "")}
+        style={{ "--c": css(stepColor(active)) } as React.CSSProperties}
+        onClick={() => setListOpen((o) => !o)}
+        title="All steps: rename, clear"
+      >
+        {active > 0 ? (
+          <><i /> <span className="label">{names.get(active) || `Step ${active}`}</span> <small>{active}/{steps.length}</small></>
+        ) : (
+          <>Steps <small>{steps.length}</small></>
+        )}
+        <Icon name="chevronDown" />
+      </button>
+      <IconButton icon="next" onClick={() => step(1)} disabled={pos >= order.length - 1} title="Next step (→)" />
+      <IconButton icon="plus" onClick={newStep} title="New step at the end (N)" />
+    </div>
+  );
 
   return (
     <div className="editor">
-      <CanvasView
-        doc={doc}
-        view={view}
-        onView={(v) => {
-          userMoved.current = true;
-          setView(v);
-        }}
-        onSize={(w, h) => setSize({ w, h })}
-        cursor={hover ? "pointer" : "crosshair"}
-        onDown={(c) => {
-          setListOpen(false);
-          drag.current = { x: c.x, y: c.y, moved: false, hit: pickAt(doc, c.x, c.y, 5 * c.scale) };
-        }}
-        onMove={(c) => {
-          const d = drag.current;
-          if (!d) {
-            setHover(pickAt(doc, c.x, c.y, 5 * c.scale));
-            return;
-          }
-          if (!d.moved && Math.hypot(c.x - d.x, c.y - d.y) / c.scale < 4) return;
-          d.moved = true;
-          setHover(null);
-          setBox(rect(d, c));
-        }}
-        onUp={(c) => {
-          const d = drag.current;
-          drag.current = null;
-          setBox(null);
-          if (!d) return;
-          if (d.moved) apply(doc.items.filter((it) => itemInBox(it, rect(d, c))), false);
-          else if (d.hit) apply([d.hit], true);
-        }}
-        onCancel={() => {
-          drag.current = null;
-          setBox(null);
-        }}
-        onLeave={() => setHover(null)}
-        options={{
-          paper: p.paper,
-          halo: (it) => {
-            const s = stageOf(it);
-            if (s === 0) return undefined;
-            // Current step glows; others stay faint so long lectures with repeating colours stay readable.
-            const [r, g, b] = stepColor(s);
-            return [r, g, b, s === active ? 160 : 40];
-          },
-          hover,
-          marquee: box,
-          accent: stepColor(active),
-        }}
-      />
-
-      <header className="topbar">
-        <button className="ghost" onClick={p.onClose} title="Open another file">←</button>
+      <header className="bar">
+        <IconButton icon="back" onClick={p.onClose} title="Open another file" />
         <span className="title" title={doc.fileName}>{doc.fileName.replace(/\.(xcanvas|xnote)$/i, "")}</span>
-        <span className="spacer" />
-        <button className="ghost" onClick={p.onUndo} disabled={!p.canUndo} title="Undo (⌘/Ctrl+Z)">↶</button>
-        <button className="ghost" onClick={() => p.onPaper(p.paper === "dark" ? "light" : "dark")} title="Paper colour">
-          {p.paper === "dark" ? "☾" : "☀"}
-        </button>
-        <button className={p.saveState === "unsaved" ? "" : "ghost"} onClick={p.onSave} title="Save steps (⌘/Ctrl+S)">{saveLabel}</button>
-        <button className="ghost" onClick={p.onExport} title="Download one HTML file that presents this lesson anywhere, offline">Export</button>
-        <button className="primary" onClick={p.onPresent} title="Present (P)">Present ▶</button>
+        {wide ? stepsGroup : <span className="spacer" />}
+        <div className="group">
+          <IconButton icon="zoomOut" onClick={() => zoomBy(1 / ZOOM_STEP)} disabled={zoomLocked} title="Zoom out" />
+          <button className="pct" onClick={() => { userMoved.current = false; fit(); }} title="Fit to screen (F)">
+            {view ? Math.round(view.zoom * 100) : 100}%
+          </button>
+          <IconButton icon="zoomIn" onClick={() => zoomBy(ZOOM_STEP)} disabled={zoomLocked} title="Zoom in" />
+          <IconButton
+            icon={zoomLocked ? "lock" : "unlock"}
+            active={zoomLocked}
+            onClick={() => setZoomLocked((z) => !z)}
+            title={zoomLocked ? "Unlock zoom (L)" : "Lock zoom (L): pinch only pans, so tapping strokes can't zoom by accident"}
+          />
+        </div>
+        <div className="group">
+          <IconButton icon="undo" onClick={p.onUndo} disabled={!p.canUndo} title="Undo (⌘/Ctrl+Z)" />
+          <IconButton icon={p.paper === "dark" ? "sun" : "moon"} onClick={() => p.onPaper(p.paper === "dark" ? "light" : "dark")} title={p.paper === "dark" ? "Light mode" : "Dark mode"} />
+          <IconButton icon={saveIcon} label={saveLabel} className={p.saveState === "unsaved" ? "attn" : ""} onClick={p.onSave} title="Save steps (⌘/Ctrl+S)" />
+          <IconButton icon="export" label="Export" onClick={p.onExport} title="Export one HTML file that presents anywhere, offline" />
+        </div>
+        <IconButton icon="play" label="Present" className="primary" onClick={p.onPresent} title="Present (P)" />
       </header>
 
-      {(p.notice || doc.warnings.length > 0) && (
-        <div className="notice" onClick={p.onDismissNotice} title="Click to dismiss">
-          {p.notice && <div>{p.notice}</div>}
-          {doc.warnings.map((w) => <div key={w} className="muted">{w}</div>)}
-        </div>
-      )}
-
-      <footer className="stepbar">
+      <div className="stage">
+        <CanvasView
+          doc={doc}
+          view={view}
+          zoomLocked={zoomLocked}
+          onView={(v) => {
+            userMoved.current = true;
+            setView(v);
+          }}
+          onSize={(w, h) => setSize({ w, h })}
+          cursor={hover ? "pointer" : "crosshair"}
+          onDown={(c) => {
+            setListOpen(false);
+            drag.current = { x: c.x, y: c.y, moved: false, hit: pickAt(doc, c.x, c.y, 5 * c.scale) };
+          }}
+          onMove={(c) => {
+            const d = drag.current;
+            if (!d) {
+              setHover(pickAt(doc, c.x, c.y, 5 * c.scale));
+              return;
+            }
+            if (!d.moved && Math.hypot(c.x - d.x, c.y - d.y) / c.scale < 4) return;
+            d.moved = true;
+            setHover(null);
+            setBox(rect(d, c));
+          }}
+          onUp={(c) => {
+            const d = drag.current;
+            drag.current = null;
+            setBox(null);
+            if (!d) return;
+            if (d.moved) apply(doc.items.filter((it) => itemInBox(it, rect(d, c))), false);
+            else if (d.hit) apply([d.hit], true);
+          }}
+          onCancel={() => {
+            drag.current = null;
+            setBox(null);
+          }}
+          onLeave={() => setHover(null)}
+          options={{
+            paper: p.paper,
+            halo: (it) => {
+              const s = stageOf(it);
+              if (s === 0) return undefined;
+              // Current step glows; others stay faint so long lectures with repeating colours stay readable.
+              const [r, g, b] = stepColor(s);
+              return [r, g, b, s === active ? 160 : 40];
+            },
+            hover,
+            marquee: box,
+            accent: stepColor(active),
+          }}
+        />
+        {!noticeHidden && (p.notice || doc.warnings.length > 0) && (
+          <div className="notice" onClick={() => { setNoticeHidden(true); p.onDismissNotice(); }} title="Click to dismiss">
+            {p.notice && <div>{p.notice}</div>}
+            {doc.warnings.map((w) => <div key={w} className="muted">{w}</div>)}
+          </div>
+        )}
         {!assignedAny && (
           <div className="hint">
             Pick a step, then tap strokes or drag a box around them.{" "}
-            <button className="link" onClick={p.onLoadSteps}>Already have a .reveal.json? Load it</button>
+            <button className="link" onClick={p.onLoadSteps}>Have a .reveal.json? Load it</button>
           </div>
         )}
-        {listOpen && (
-          <div className="steplist">
-            {steps.map((s) => (
-              <div key={s} className={"row" + (s === active ? " active" : "")} style={{ "--c": css(stepColor(s)) } as React.CSSProperties}>
-                <button className="ghost dot" onClick={() => { choose(s); setListOpen(false); }} title={`Go to step ${s}`}>
-                  <i /> {s}
-                </button>
-                <input
-                  value={names.get(s) ?? ""}
-                  placeholder={`Step ${s} name`}
-                  onFocus={() => choose(s)}
-                  onChange={(e) => rename(s, e.target.value)}
-                />
-                <small>{counts.get(s) ?? 0}</small>
-                {(counts.get(s) ?? 0) > 0 && (
-                  <button className="ghost" onClick={() => clearStep(s)} title="Move this step's strokes back to Always">✕</button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="chips">
-          <button
-            className={"chip" + (active === 0 ? " active" : "")}
-            style={{ "--c": css(ALWAYS) } as React.CSSProperties}
-            onClick={() => choose(0)}
-            title="Visible from the start (key 0)"
-          >
-            Always <small>{counts.get(0) ?? 0}</small>
-          </button>
-          <span className="sep" />
-          <button className="ghost nav" onClick={() => step(-1)} disabled={pos <= 0} title="Previous step (←)">‹</button>
-          <button
-            className={"chip current" + (active > 0 ? " active" : "")}
-            style={{ "--c": css(stepColor(active)) } as React.CSSProperties}
-            onClick={() => setListOpen((o) => !o)}
-            title="All steps"
-          >
-            {active > 0 ? (
-              <><i /> <span className="label">{names.get(active) || `Step ${active}`}</span> <small>{active}/{steps.length}</small></>
-            ) : (
-              <>Steps <small>{steps.length}</small></>
-            )} ▾
-          </button>
-          <button className="ghost nav" onClick={() => step(1)} disabled={pos >= order.length - 1} title="Next step (→)">›</button>
-          <button className="chip add" onClick={newStep} title="New step at the end (N)">+</button>
-        </div>
-      </footer>
+      </div>
+
+      {!wide && <footer className="bar bottom">{stepsGroup}</footer>}
     </div>
   );
 }

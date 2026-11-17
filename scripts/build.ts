@@ -15,6 +15,19 @@ if (!res.success) {
   process.exit(1);
 }
 
+// The presentation-only bundle that Export inlines into lesson files (stable names so the app can fetch it).
+const player = await Bun.build({
+  entrypoints: ["./src/player.tsx"],
+  outdir: out,
+  naming: "[name].[ext]",
+  minify: true,
+  define: { "process.env.NODE_ENV": '"production"' },
+});
+if (!player.success) {
+  for (const log of player.logs) console.error(log);
+  process.exit(1);
+}
+
 await cp("public", out, { recursive: true });
 
 const sw = await readFile(`${out}/sw.js`, "utf8");
@@ -29,5 +42,5 @@ const links = [
 const html = await readFile(`${out}/index.html`, "utf8");
 await writeFile(`${out}/index.html`, html.replace("</head>", `${links}</head>`));
 
-for (const o of res.outputs) console.log(`  ${o.path.replace(process.cwd() + "/", "")}  ${(o.size / 1024).toFixed(1)} KB`);
+for (const o of [...res.outputs, ...player.outputs]) console.log(`  ${o.path.replace(process.cwd() + "/", "")}  ${(o.size / 1024).toFixed(1)} KB`);
 console.log("Built dist/");

@@ -26,13 +26,16 @@ interface Props {
   onCancel?: () => void;
   onLeave?: () => void;
   cursor?: string;
+  /** Pinch and ⌘/Ctrl+wheel stop zooming; panning still works (as XNotes' zoom lock). */
+  zoomLocked?: boolean;
   className?: string;
 }
 
 const MIN_ZOOM = 0.02;
 const MAX_ZOOM = 40;
+export const ZOOM_STEP = 1.25;
 
-function zoomAt(v: View, sx: number, sy: number, factor: number): View {
+export function zoomAt(v: View, sx: number, sy: number, factor: number): View {
   const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.zoom * factor));
   const cx = v.scrollX + sx / v.zoom;
   const cy = v.scrollY + sy / v.zoom;
@@ -119,7 +122,10 @@ export function CanvasView(p: Props) {
       const sy = e.clientY - r.top;
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? r.height : 1;
       if (e.ctrlKey || e.metaKey) {
-        latest.current.onView(zoomAt(v, sx, sy, Math.exp(-e.deltaY * unit * 0.01)));
+        if (latest.current.zoomLocked) return;
+        // Trackpad pinches send small deltas; a mouse wheel notch can send hundreds, so cap each event.
+        const d = Math.max(-50, Math.min(50, e.deltaY * unit));
+        latest.current.onView(zoomAt(v, sx, sy, Math.exp(-d * 0.01)));
       } else {
         latest.current.onView({ ...v, scrollX: v.scrollX + (e.deltaX * unit) / v.zoom, scrollY: v.scrollY + (e.deltaY * unit) / v.zoom });
       }
@@ -183,7 +189,7 @@ export function CanvasView(p: Props) {
             const d = Math.hypot(a.x - b.x, a.y - b.y);
             const mx = (a.x + b.x) / 2;
             const my = (a.y + b.y) / 2;
-            const z = zoomAt(s.view, s.mx, s.my, d / Math.max(1, s.d));
+            const z = zoomAt(s.view, s.mx, s.my, p.zoomLocked ? 1 : d / Math.max(1, s.d));
             p.onView({ ...z, scrollX: z.scrollX - (mx - s.mx) / z.zoom, scrollY: z.scrollY - (my - s.my) / z.zoom });
           } else if (gesture.current === "pan") {
             const q = local(e);

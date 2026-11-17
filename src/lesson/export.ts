@@ -25,21 +25,21 @@ export function fromBase64(b64: string): Uint8Array {
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
 /**
- * One self-contained HTML file: this app's own script and styles, inlined, plus the original
- * .xcanvas and its steps. It opens offline in any modern browser and starts in presentation mode.
+ * One self-contained HTML file: the presentation-only player bundle (player.js/.css, built next to the
+ * app), inlined, plus the original notes file and its steps. Opens offline in any modern browser.
  */
 export async function buildLessonHtml(lesson: EmbeddedLesson): Promise<string> {
-  const script = document.querySelector<HTMLScriptElement>('script[type="module"][src]');
-  if (!script) throw new Error("Export is not available here.");
-  const js = await (await fetch(script.src)).text();
-  let css = "";
-  for (const l of document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')) css += await (await fetch(l.href)).text();
-  for (const s of document.querySelectorAll("style")) css += s.textContent ?? "";
-  // Keep inlined text from closing its own tag early.
-  const safeJs = js.replace(/<\/script/gi, "<\\/script");
+  const get = async (name: string) => {
+    const res = await fetch(new URL(name, document.baseURI));
+    if (!res.ok) throw new Error(`could not load ${name} (${res.status})`);
+    return res.text();
+  };
+  const [js, css] = await Promise.all([get("player.js"), get("player.css")]);
+  // Keep inlined code from ending its own tag early or opening an HTML comment.
+  const safeJs = js.replace(/<\/script/gi, "<\\/script").replace(/<!--/g, "<\\!--");
   const safeCss = css.replace(/<\/style/gi, "<\\/style");
   const data = JSON.stringify(lesson).replace(/</g, "\\u003c");
-  const title = escapeHtml(lesson.name.replace(/\.xcanvas$/i, ""));
+  const title = escapeHtml(lesson.name.replace(/\.(xcanvas|xnote)$/i, ""));
   return `<!doctype html>
 <html lang="en">
 <head>
