@@ -1,0 +1,264 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Bounds, CanvasDoc, CanvasItem, Rgba } from "../format/xcanvas";
+import { fitView, type PaperMode, type View } from "../render/draw";
+import { itemInBox, pickAt } from "../render/hit";
+import { compactStages, usedStages, type Steps } from "../lesson/reveal";
+import { CanvasView } from "./CanvasView";
+
+const STEP_COLORS: Rgba[] = [
+  [255, 99, 132, 255], [54, 214, 140, 255], [77, 163, 255, 255], [255, 177, 66, 255], [180, 120, 255, 255],
+  [64, 224, 208, 255], [255, 110, 220, 255], [200, 230, 80, 255], [255, 140, 90, 255], [140, 200, 255, 255],
+];
+const ALWAYS: Rgba = [200, 200, 210, 255];
+export const stepColor = (s: number): Rgba => (s === 0 ? ALWAYS : STEP_COLORS[(s - 1) % STEP_COLORS.length]);
+const css = (c: Rgba) => `rgb(${c[0]},${c[1]},${c[2]})`;
+
+export type SaveState = "saved" | "unsaved" | "saving";
+
+interface Props {
+  doc: CanvasDoc;
+  ids: string[];
+  steps: Steps;
+  paper: PaperMode;
+  notice: string | null;
+  saveState: SaveState;
+  canUndo: boolean;
+  onSteps: (next: Steps, record: boolean) => void;
+  onUndo: () => void;
+  onPaper: (p: PaperMode) => void;
+  onSave: () => void;
+  onExport: () => void;
+  onPresent: () => void;
+  onClose: () => void;
+  onDismissNotice: () => void;
+}
+
+export function Editor(p: Props) {
+  const { doc, ids } = p;
+  const { stages, names } = p.steps;
+  const idOf = useMemo(() => new Map(doc.items.map((it, i) => [it, ids[i]])), [doc, ids]);
+  const stageOf = useCallback((it: CanvasItem) => stages.get(idOf.get(it)!) ?? 0, [stages, idOf]);
+  const [view, setView] = useState<View | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const [active, setActive] = useState(1);
+  const [hover, setHover] = useState<CanvasItem | null>(null);
+  const [box, setBox] = useState<Bounds | null>(null);
+  const [listOpen, setListOpen] = useState(false);
+  const drag = useRef<{ x: number; y: number; moved: boolean; hit: CanvasItem | null } | null>(null);
+
+  const steps = useMemo(() => {
+    const s = new Set(usedStages(stages));
+    if (active > 0) s.add(active);
+    return [...s].sort((a, b) => a - b);
+  }, [stages, active]);
+  const counts = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const s of stages.values()) m.set(s, (m.get(s) ?? 0) + 1);
+    return m;
+  }, [stages]);
+  const assignedAny = usedStages(stages).length > 0;
+
+  const fit = useCallback(() => size.w > 0 && setView(fitView(doc.bounds, size.w, size.h, 40, 50, 100)), [doc, size]);
+  // Keep the whole canvas fitted as the window resizes, until the user pans or zooms.
+  const userMoved = useRef(false);
+  useEffect(() => {
+    if ((!view || !userMoved.current) && size.w > 0) fit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size, fit]);
+
+  const commit = useCallback(
+    (stagesNext: Map<string, number>, namesNext: Map<number, string>, keep: number, record: boolean) => {
+      const c = compactStages({ stages: stagesNext, names: namesNext }, keep);
+      if (record || c.steps.stages !== stages || c.steps.names !== names) p.onSteps(c.steps, record);
+      setActive(c.keep);
+    },
+    [stages, names, p],
+  );
+  const choose = useCallback((s: number) => commit(stages, names, s, false), [commit, stages, names]);
+  const newStep = useCallback(() => choose((usedStages(stages).at(-1) ?? 0) + 1), [choose, stages]);
+  // Linear order for ‹ ›: Always, Step 1, Step 2, …
+  const order = useMemo(() => [0, ...steps], [steps]);
+  const pos = order.indexOf(active);
+  const step = useCallback((d: number) => {
+    const i = pos + d;
+    if (i >= 0 && i < order.length) choose(order[i]);
+  }, [pos, order, choose]);
+
+  const clearStep = (s: number) => {
+    const next = new Map(stages);
+    for (const [id, v] of next) if (v === s) next.set(id, 0);
+    commit(next, names, active === s ? 0 : active, true);
+  };
+
+  const rename = (s: number, name: string) => {
+    const next = new Map(names);
+    if (name.trim()) next.set(s, name);
+    else next.delete(s);
+    p.onSteps({ stages, names: next }, false);
+  };
+
+  const apply = (items: CanvasItem[], toggle: boolean) => {
+    if (items.length === 0) return;
+    const next = new Map(stages);
+    // Tapping a stroke that is already in the active step takes it back out.
+    const turnOff = toggle && active !== 0 && items.every((it) => stageOf(it) === active);
+    for (const it of items) next.set(idOf.get(it)!, turnOff ? 0 : active);
+    commit(next, names, active, true);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) {
+        if (e.key === "Enter" || e.key === "Escape") e.target.blur();
+        return;
+      }
+      const mod = e.metaKey || e.ctrlKey;
+      const k = e.key.toLowerCase();
+      if (mod && k === "s") { e.preventDefault(); p.onSave(); }
+      else if (mod && k === "z") { e.preventDefault(); p.onUndo(); }
+      else if (mod) return;
+      else if (/^[0-9]$/.test(e.key)) { const s = Number(e.key); if (s === 0 || steps.includes(s)) choose(s); }
+      else if (e.key === "ArrowRight") step(1);
+      else if (e.key === "ArrowLeft") step(-1);
+      else if (k === "escape") setListOpen(false);
+      else if (k === "n" || e.key === "+") newStep();
+      else if (k === "p") p.onPresent();
+      else if (k === "f") { userMoved.current = false; fit(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [p, steps, choose, newStep, fit, step]);
+
+  const rect = (a: { x: number; y: number }, b: { x: number; y: number }): Bounds => ({
+    minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y),
+  });
+
+  const saveLabel = p.saveState === "saving" ? "Saving…" : p.saveState === "saved" ? "Saved ✓" : "Save";
+
+  return (
+    <div className="editor">
+      <CanvasView
+        doc={doc}
+        view={view}
+        onView={(v) => {
+          userMoved.current = true;
+          setView(v);
+        }}
+        onSize={(w, h) => setSize({ w, h })}
+        cursor={hover ? "pointer" : "crosshair"}
+        onDown={(c) => {
+          setListOpen(false);
+          drag.current = { x: c.x, y: c.y, moved: false, hit: pickAt(doc, c.x, c.y, 5 * c.scale) };
+        }}
+        onMove={(c) => {
+          const d = drag.current;
+          if (!d) {
+            setHover(pickAt(doc, c.x, c.y, 5 * c.scale));
+            return;
+          }
+          if (!d.moved && Math.hypot(c.x - d.x, c.y - d.y) / c.scale < 4) return;
+          d.moved = true;
+          setHover(null);
+          setBox(rect(d, c));
+        }}
+        onUp={(c) => {
+          const d = drag.current;
+          drag.current = null;
+          setBox(null);
+          if (!d) return;
+          if (d.moved) apply(doc.items.filter((it) => itemInBox(it, rect(d, c))), false);
+          else if (d.hit) apply([d.hit], true);
+        }}
+        onCancel={() => {
+          drag.current = null;
+          setBox(null);
+        }}
+        onLeave={() => setHover(null)}
+        options={{
+          paper: p.paper,
+          halo: (it) => {
+            const s = stageOf(it);
+            if (s === 0) return undefined;
+            // Current step glows; others stay faint so long lectures with repeating colours stay readable.
+            const [r, g, b] = stepColor(s);
+            return [r, g, b, s === active ? 160 : 40];
+          },
+          hover,
+          marquee: box,
+          accent: stepColor(active),
+        }}
+      />
+
+      <header className="topbar">
+        <button className="ghost" onClick={p.onClose} title="Open another file">←</button>
+        <span className="title" title={doc.fileName}>{doc.fileName.replace(/\.(xcanvas|xnote)$/i, "")}</span>
+        <span className="spacer" />
+        <button className="ghost" onClick={p.onUndo} disabled={!p.canUndo} title="Undo (⌘/Ctrl+Z)">↶</button>
+        <button className="ghost" onClick={() => p.onPaper(p.paper === "dark" ? "light" : "dark")} title="Paper colour">
+          {p.paper === "dark" ? "☾" : "☀"}
+        </button>
+        <button className={p.saveState === "unsaved" ? "" : "ghost"} onClick={p.onSave} title="Save steps (⌘/Ctrl+S)">{saveLabel}</button>
+        <button className="ghost" onClick={p.onExport} title="Download one HTML file that presents this lesson anywhere, offline">Export</button>
+        <button className="primary" onClick={p.onPresent} title="Present (P)">Present ▶</button>
+      </header>
+
+      {(p.notice || doc.warnings.length > 0) && (
+        <div className="notice" onClick={p.onDismissNotice} title="Click to dismiss">
+          {p.notice && <div>{p.notice}</div>}
+          {doc.warnings.map((w) => <div key={w} className="muted">{w}</div>)}
+        </div>
+      )}
+
+      <footer className="stepbar">
+        {!assignedAny && <div className="hint">Pick a step, then tap strokes or drag a box around them.</div>}
+        {listOpen && (
+          <div className="steplist">
+            {steps.map((s) => (
+              <div key={s} className={"row" + (s === active ? " active" : "")} style={{ "--c": css(stepColor(s)) } as React.CSSProperties}>
+                <button className="ghost dot" onClick={() => { choose(s); setListOpen(false); }} title={`Go to step ${s}`}>
+                  <i /> {s}
+                </button>
+                <input
+                  value={names.get(s) ?? ""}
+                  placeholder={`Step ${s} name`}
+                  onFocus={() => choose(s)}
+                  onChange={(e) => rename(s, e.target.value)}
+                />
+                <small>{counts.get(s) ?? 0}</small>
+                {(counts.get(s) ?? 0) > 0 && (
+                  <button className="ghost" onClick={() => clearStep(s)} title="Move this step's strokes back to Always">✕</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="chips">
+          <button
+            className={"chip" + (active === 0 ? " active" : "")}
+            style={{ "--c": css(ALWAYS) } as React.CSSProperties}
+            onClick={() => choose(0)}
+            title="Visible from the start (key 0)"
+          >
+            Always <small>{counts.get(0) ?? 0}</small>
+          </button>
+          <span className="sep" />
+          <button className="ghost nav" onClick={() => step(-1)} disabled={pos <= 0} title="Previous step (←)">‹</button>
+          <button
+            className={"chip current" + (active > 0 ? " active" : "")}
+            style={{ "--c": css(stepColor(active)) } as React.CSSProperties}
+            onClick={() => setListOpen((o) => !o)}
+            title="All steps"
+          >
+            {active > 0 ? (
+              <><i /> <span className="label">{names.get(active) || `Step ${active}`}</span> <small>{active}/{steps.length}</small></>
+            ) : (
+              <>Steps <small>{steps.length}</small></>
+            )} ▾
+          </button>
+          <button className="ghost nav" onClick={() => step(1)} disabled={pos >= order.length - 1} title="Next step (→)">›</button>
+          <button className="chip add" onClick={newStep} title="New step at the end (N)">+</button>
+        </div>
+      </footer>
+    </div>
+  );
+}
