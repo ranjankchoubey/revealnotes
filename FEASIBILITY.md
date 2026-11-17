@@ -64,7 +64,7 @@ dots) every `spacing`, doubling/halving by powers of two with zoom.
 | Geometry-based selection | Yes: distance to the ribbon (segment distance ≤ interpolated half-width). |
 | Stable object identity | Not provided by the format. Use a **content fingerprint** per item (hash of the item JSON minus `group`, `locked`, `id`, `rec`, `rec_ms`), with an occurrence suffix for exact duplicates. Re-ordering does not break it; editing/moving an item does, and is reported. |
 | Detect document change | SHA-256 of `manifest.json` stored in `reveal.json`; on mismatch, re-match by fingerprint and warn about unmatched/new items. |
-| `.xnote` notebooks | Plausible later (pages + same item kinds), but not claimed until tested with a real file. PDF backgrounds would need pdf.js. |
+| `.xnote` notebooks | Experimental reader built from `DocumentCodec`: pages stacked vertically (48 px gap), page-local items offset, lines/dots/grid paper, text boxes approximated. Tested only on a synthetic file; PDF backgrounds and custom templates are not drawn (reported). |
 
 ## 5. Technology choice
 
