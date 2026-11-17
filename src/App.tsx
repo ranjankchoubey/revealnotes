@@ -289,7 +289,7 @@ export function App() {
           </>
         )}
         <ol className="how">
-          <li><span><b>Open</b> your <code>.xcanvas</code> (or <code>.xnote</code>, experimental)</span></li>
+          <li><span><b>Open</b> your <code>.xcanvas</code> or <code>.xnote</code></span></li>
           <li><span><b>Mark steps</b>: tap or box your strokes</span></li>
           <li><span><b>Present</b>: reveal step by step</span></li>
         </ol>

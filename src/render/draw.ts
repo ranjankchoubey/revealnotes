@@ -140,7 +140,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: StrokeItem, written = 1) {
   ctx.restore();
 }
 
-export type RevealStyle = "instant" | "fade" | "write" | "wipe";
+export type RevealStyle = "instant" | "fade" | "write" | "wipe" | "roll" | "rise" | "pop";
 
 /** How far an item is into its reveal animation; omitted = fully shown. */
 export interface RevealState {
@@ -151,21 +151,58 @@ export interface RevealState {
   area?: Bounds;
 }
 
+const easeOut = (t: number) => 1 - (1 - t) ** 3;
+// Slight overshoot, for "pop".
+const easeBack = (t: number) => 1 + 2.2 * (t - 1) ** 3 + 1.2 * (t - 1) ** 2;
+
 function drawRevealing(ctx: CanvasRenderingContext2D, doc: CanvasDoc, it: CanvasItem, onAsset: () => void, r?: RevealState) {
   if (!r || r.p >= 1 || r.style === "instant") return drawItem(ctx, doc, it, onAsset);
   if (r.p <= 0) return;
+  const p = r.p;
+  const b = it.bounds;
   ctx.save();
-  if (r.style === "write" && it.kind === "stroke") {
-    drawStroke(ctx, it, r.p);
-  } else if (r.style === "wipe") {
-    const a = r.area ?? it.bounds;
-    ctx.beginPath();
-    ctx.rect(a.minX - 50, a.minY - 50, (a.maxX - a.minX + 100) * r.p, a.maxY - a.minY + 100);
-    ctx.clip();
-    drawItem(ctx, doc, it, onAsset);
-  } else {
-    ctx.globalAlpha *= r.p;
-    drawItem(ctx, doc, it, onAsset);
+  switch (r.style) {
+    case "write":
+      if (it.kind === "stroke") {
+        drawStroke(ctx, it, p);
+        break;
+      }
+      ctx.globalAlpha *= easeOut(p);
+      drawItem(ctx, doc, it, onAsset);
+      break;
+    case "wipe":
+    case "roll": {
+      // A soft-edged sweep across the whole step: left to right (wipe) or top to bottom (roll).
+      const a = r.area ?? b;
+      const e = easeOut(p);
+      ctx.beginPath();
+      if (r.style === "wipe") ctx.rect(a.minX - 50, a.minY - 50, (a.maxX - a.minX + 100) * e, a.maxY - a.minY + 100);
+      else ctx.rect(a.minX - 50, a.minY - 50, a.maxX - a.minX + 100, (a.maxY - a.minY + 100) * e);
+      ctx.clip();
+      drawItem(ctx, doc, it, onAsset);
+      break;
+    }
+    case "rise": {
+      const e = easeOut(p);
+      ctx.globalAlpha *= e;
+      ctx.translate(0, (1 - e) * Math.min(60, (b.maxY - b.minY) * 0.6 + 20));
+      drawItem(ctx, doc, it, onAsset);
+      break;
+    }
+    case "pop": {
+      const s = 0.6 + 0.4 * easeBack(p);
+      const cx = (b.minX + b.maxX) / 2;
+      const cy = (b.minY + b.maxY) / 2;
+      ctx.globalAlpha *= Math.min(1, p * 2.5);
+      ctx.translate(cx, cy);
+      ctx.scale(s, s);
+      ctx.translate(-cx, -cy);
+      drawItem(ctx, doc, it, onAsset);
+      break;
+    }
+    default:
+      ctx.globalAlpha *= easeOut(p);
+      drawItem(ctx, doc, it, onAsset);
   }
   ctx.restore();
 }

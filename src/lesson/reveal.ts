@@ -1,14 +1,19 @@
 import type { Bounds, CanvasDoc } from "../format/xcanvas";
 import type { PaperMode, RevealStyle } from "../render/draw";
 
-export type RevealSpeed = "slow" | "normal" | "fast";
 export interface Animation {
   style: RevealStyle;
-  speed: RevealSpeed;
+  /** Multiplier on the base pace: 0.5 = half speed, 2 = double. */
+  speed: number;
 }
-export const DEFAULT_ANIMATION: Animation = { style: "write", speed: "normal" };
-const STYLES: RevealStyle[] = ["instant", "fade", "write", "wipe"];
-const SPEEDS: RevealSpeed[] = ["slow", "normal", "fast"];
+export const DEFAULT_ANIMATION: Animation = { style: "write", speed: 1 };
+export const REVEAL_STYLES: RevealStyle[] = ["write", "fade", "rise", "pop", "wipe", "roll", "instant"];
+const OLD_SPEEDS: Record<string, number> = { slow: 0.5, normal: 1, fast: 2 };
+
+function parseSpeed(v: unknown): number {
+  const n = typeof v === "number" ? v : typeof v === "string" ? OLD_SPEEDS[v] : undefined;
+  return n && Number.isFinite(n) ? Math.min(4, Math.max(0.25, n)) : DEFAULT_ANIMATION.speed;
+}
 
 export const REVEAL_FILE = "reveal.json";
 
@@ -135,11 +140,12 @@ export function applyReveal(doc: CanvasDoc, ids: string[], file: RevealFile): { 
   }
   const a = file.animation;
   const animation: Animation = {
-    style: a && STYLES.includes(a.style) ? a.style : DEFAULT_ANIMATION.style,
-    speed: a && SPEEDS.includes(a.speed) ? a.speed : DEFAULT_ANIMATION.speed,
+    style: a && REVEAL_STYLES.includes(a.style) ? a.style : DEFAULT_ANIMATION.style,
+    speed: parseSpeed(a?.speed),
   };
   return {
-    lesson: { stages, names, base: file, paper: file.paper === "dark" ? "dark" : "light", animation },
+    // The theme is this device's choice; a paper saved in the steps file doesn't override it.
+    lesson: { stages, names, base: file, paper: preferredPaper(), animation },
     report: {
       docChanged: file.manifest_sha256 !== doc.manifestSha256,
       docNameDiffers: file.document !== doc.fileName,

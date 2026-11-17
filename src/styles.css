@@ -64,6 +64,12 @@ body { -webkit-touch-callout: none; touch-action: manipulation; }
 .row.col .seg { display: flex; }
 .row.col .seg button { flex: 1; }
 .swatches { display: flex; gap: 8px; }
+.styles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.styles button { padding: 7px 4px; border-radius: 9px; font-size: 13px; background: var(--hover); min-height: 36px; }
+.styles button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; box-shadow: inset 0 0 0 1.5px var(--accent); }
+.speed { display: flex; align-items: center; gap: 8px; }
+.speed input { width: 150px; accent-color: var(--accent); }
+.speed span { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .swatches button { width: 30px; height: 30px; padding: 0; border-radius: 50%; border: 3px solid transparent; }
 .swatches button.on { border-color: var(--text); }
 .update-banner {

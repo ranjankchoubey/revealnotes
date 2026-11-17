@@ -209,7 +209,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
       const items = doc.items.filter((it) => stageOf(it) === stage);
       const area = union(items);
       if (!area) return;
-      const f = { slow: 0.5, normal: 1, fast: 2 }[animation.speed];
+      const f = animation.speed;
       const sched = new Map<CanvasItem, [number, number]>();
       let total = 0;
       if (animation.style === "write") {
@@ -223,8 +223,12 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           total += durs[i] * scale;
         });
       } else {
-        total = (animation.style === "wipe" ? 800 : 450) / f;
-        for (const it of items) sched.set(it, [0, total]);
+        const base = { fade: 500, rise: 600, pop: 450, wipe: 800, roll: 800 }[animation.style as "fade"] / f;
+        // Rise and pop cascade through the step in writing order; fade and the sweeps move as one.
+        const cascade = animation.style === "rise" || animation.style === "pop";
+        const gap = cascade ? Math.min(70 / f, (base * 1.2) / Math.max(1, items.length)) : 0;
+        items.forEach((it, i) => sched.set(it, [i * gap, i * gap + base]));
+        total = base + gap * (items.length - 1);
       }
       revealing.current = { start: performance.now(), total, sched, area };
       const tick = () => {

@@ -23,5 +23,13 @@ export function Player({ data }: { data: EmbeddedLesson }) {
 
   if (!state) return null;
   if ("error" in state) return <main className="start"><p className="error">Could not open this lesson: {state.error}</p></main>;
-  return <Presenter doc={state.doc} ids={state.ids} steps={state.lesson} paper={state.lesson.paper} animation={state.lesson.animation} />;
+  return (
+    <Presenter
+      doc={state.doc}
+      ids={state.ids}
+      steps={state.lesson}
+      paper={data.reveal.paper === "dark" ? "dark" : "light"}
+      animation={state.lesson.animation}
+    />
+  );
 }

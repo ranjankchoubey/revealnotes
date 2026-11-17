@@ -1,5 +1,15 @@
 import type { PaperMode, RevealStyle } from "../render/draw";
-import type { Animation, RevealSpeed } from "../lesson/reveal";
+import { REVEAL_STYLES, type Animation } from "../lesson/reveal";
+
+const STYLE_INFO: Record<RevealStyle, [string, string]> = {
+  write: ["Write", "Strokes draw themselves in the order you wrote them (recommended)"],
+  fade: ["Fade", "The step fades in"],
+  rise: ["Rise", "Strokes float up into place, one after another"],
+  pop: ["Pop", "Strokes pop in with a little bounce, one after another"],
+  wipe: ["Wipe", "Uncovered left to right"],
+  roll: ["Roll down", "Uncovered top to bottom"],
+  instant: ["Instant", "Appears at once"],
+};
 import { IconButton } from "./icons";
 import { LASER_COLORS, setSettings, useSettings, type Settings } from "./settings";
 
@@ -62,20 +72,34 @@ export function SettingsPanel(p: Props) {
         <>
           <div className="row col">
             <span>Reveal style</span>
-            <Seg<RevealStyle>
-              value={p.animation.style}
-              options={[["write", "Write"], ["fade", "Fade"], ["wipe", "Wipe"], ["instant", "Instant"]]}
-              onChange={(style) => p.onAnimation!({ ...p.animation!, style })}
-            />
+            <div className="styles">
+              {REVEAL_STYLES.map((st) => (
+                <button
+                  key={st}
+                  className={st === p.animation!.style ? "on" : ""}
+                  onClick={() => p.onAnimation!({ ...p.animation!, style: st })}
+                  title={STYLE_INFO[st][1]}
+                >
+                  {STYLE_INFO[st][0]}
+                </button>
+              ))}
+            </div>
+            <small className="muted">{STYLE_INFO[p.animation.style][1]}</small>
           </div>
           {p.animation.style !== "instant" && (
             <div className="row">
-              <span>Reveal speed</span>
-              <Seg<RevealSpeed>
-                value={p.animation.speed}
-                options={[["slow", "Slow"], ["normal", "Normal"], ["fast", "Fast"]]}
-                onChange={(speed) => p.onAnimation!({ ...p.animation!, speed })}
-              />
+              <span>Speed</span>
+              <div className="speed">
+                <input
+                  type="range"
+                  min={0.25}
+                  max={3}
+                  step={0.25}
+                  value={p.animation.speed}
+                  onChange={(e) => p.onAnimation!({ ...p.animation!, speed: Number(e.target.value) })}
+                />
+                <span>{p.animation.speed}×</span>
+              </div>
             </div>
           )}
         </>
