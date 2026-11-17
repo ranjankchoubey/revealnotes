@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Bounds, CanvasDoc, CanvasItem } from "../format/xcanvas";
-import { fitView, type PaperMode, type View } from "../render/draw";
-import { usedStages, type Steps } from "../lesson/reveal";
+import { fitView, strokeArc, type PaperMode, type View } from "../render/draw";
+import { usedStages, type Animation, type Steps } from "../lesson/reveal";
 import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
 import { IconButton } from "./icons";
 import { drawLasers, laserAlpha, type LaserStroke } from "../render/laser";
@@ -13,6 +13,9 @@ interface Props {
   ids: string[];
   steps: Steps;
   paper: PaperMode;
+  animation: Animation;
+  /** Lets the presenter's settings change the lesson's reveal style; omitted in exported files. */
+  onAnimation?: (a: Animation) => void;
   /** Omitted in an exported lesson, which has nothing to go back to. */
   onExit?: () => void;
 }
@@ -54,7 +57,7 @@ function union(items: CanvasItem[]): Bounds | null {
   return b;
 }
 
-export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
+export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, onAnimation }: Props) {
   const stageOf = useMemo(() => {
     const m = new Map<CanvasItem, number>(doc.items.map((it, i) => [it, lesson.stages.get(ids[i]) ?? 0]));
     return (it: CanvasItem) => m.get(it) ?? 0;
@@ -193,11 +196,88 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
     if (name) captionTimer.current = setTimeout(() => setCaption(null), 3500);
   }, [pos, lesson, steps]);
 
-  const next = useCallback(() => setPos((q) => Math.min(steps.length, q + 1)), [steps]);
-  const prev = useCallback(() => setPos((q) => Math.max(0, q - 1)), []);
-  const all = useCallback(() => setPos(steps.length), [steps]);
-  const restart = useCallback(() => setPos(0), []);
+  // The step being revealed: per-item [start, end] ms from `start`.
+  const revealing = useRef<{ start: number; total: number; sched: Map<CanvasItem, [number, number]>; area: Bounds } | null>(null);
+  const [, setRevealTick] = useState(0);
+  const revealLoop = useRef(0);
+
+  const startReveal = useCallback(
+    (stage: number) => {
+      cancelAnimationFrame(revealLoop.current);
+      revealing.current = null;
+      if (animation.style === "instant" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      const items = doc.items.filter((it) => stageOf(it) === stage);
+      const area = union(items);
+      if (!area) return;
+      const f = { slow: 0.5, normal: 1, fast: 2 }[animation.speed];
+      const sched = new Map<CanvasItem, [number, number]>();
+      let total = 0;
+      if (animation.style === "write") {
+        // Strokes replay one after another in the order they were written, at a steady pen speed.
+        const speed = 1400 * f;
+        const durs = items.map((it) => (it.kind === "stroke" ? Math.max(60, (strokeArc(it).at(-1)! / speed) * 1000) : 250 / f));
+        const sum = durs.reduce((a, b) => a + b, 0);
+        const scale = sum > 6000 / f ? 6000 / f / sum : 1;
+        items.forEach((it, i) => {
+          sched.set(it, [total, total + durs[i] * scale]);
+          total += durs[i] * scale;
+        });
+      } else {
+        total = (animation.style === "wipe" ? 800 : 450) / f;
+        for (const it of items) sched.set(it, [0, total]);
+      }
+      revealing.current = { start: performance.now(), total, sched, area };
+      const tick = () => {
+        const r = revealing.current;
+        if (r && performance.now() - r.start >= r.total) revealing.current = null;
+        setRevealTick((t) => t + 1);
+        if (revealing.current) revealLoop.current = requestAnimationFrame(tick);
+      };
+      revealLoop.current = requestAnimationFrame(tick);
+    },
+    [animation, doc, stageOf],
+  );
+  const stopReveal = () => {
+    cancelAnimationFrame(revealLoop.current);
+    revealing.current = null;
+  };
+
+  const next = useCallback(() => {
+    if (pos >= steps.length) return;
+    startReveal(steps[pos]);
+    setPos(pos + 1);
+  }, [pos, steps, startReveal]);
+  const prev = useCallback(() => {
+    stopReveal();
+    setPos((q) => Math.max(0, q - 1));
+  }, []);
+  const all = useCallback(() => {
+    stopReveal();
+    setPos(steps.length);
+  }, [steps]);
+  const restart = useCallback(() => {
+    stopReveal();
+    setPos(0);
+  }, []);
   const showOverview = useCallback(() => overview && animateTo(overview), [overview, animateTo]);
+  /** XNotes' fit width / fit height, of the page in view (notebooks) or the whole canvas. */
+  const fitAxis = useCallback(
+    (axis: "width" | "height") => {
+      const v = viewRef.current;
+      if (!v || size.w === 0) return;
+      const cy = v.scrollY + size.h / (2 * v.zoom);
+      const t = doc.pages?.find((pg) => cy < pg.bounds.maxY + 24)?.bounds ?? doc.bounds;
+      if (axis === "width") {
+        const zoom = (size.w - 2 * M) / Math.max(1, t.maxX - t.minX);
+        // A notebook page starts at its top; a canvas keeps the spot in view centred.
+        animateTo({ zoom, scrollX: t.minX - M / zoom, scrollY: doc.pages ? t.minY - M / zoom : cy - size.h / (2 * zoom) });
+      } else {
+        const zoom = (size.h - TOP - BOTTOM) / Math.max(1, t.maxY - t.minY);
+        animateTo({ zoom, scrollX: (t.minX + t.maxX) / 2 - size.w / (2 * zoom), scrollY: t.minY - TOP / zoom });
+      }
+    },
+    [doc, size, animateTo],
+  );
   const zoomBy = useCallback(
     (f: number) => {
       const v = viewRef.current;
@@ -254,6 +334,8 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
         case "r": case "R": restart(); break;
         case "f": case "F": toggleFullscreen(); break;
         case "o": case "O": showOverview(); break;
+        case "w": case "W": fitAxis("width"); break;
+        case "h": case "H": fitAxis("height"); break;
         case "l": case "L": setZoomLocked((z) => !z); break;
         case "p": case "P": setLaserOn((on) => !on); break;
         case "+": case "=": zoomBy(ZOOM_STEP); break;
@@ -263,7 +345,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [next, prev, all, restart, showOverview, onExit, goPage, zoomBy]);
+  }, [next, prev, all, restart, showOverview, onExit, goPage, zoomBy, fitAxis]);
 
   return (
     <div className="presenter">
@@ -317,10 +399,19 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit }: Props) {
         options={{
           paper,
           visible: (it) => stageOf(it) <= limit,
+          reveal: (it) => {
+            const r = revealing.current;
+            const s = r?.sched.get(it);
+            if (!r || !s) return undefined;
+            const p = Math.min(1, Math.max(0, (performance.now() - r.start - s[0]) / Math.max(1, s[1] - s[0])));
+            return { style: animation.style, p, area: r.area };
+          },
           overlay: (ctx, v) => drawLasers(ctx, v, lasers.current, performance.now(), holdMs),
         }}
       />
-      {settingsOpen && <SettingsPanel scope="present" onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsPanel scope="present" onClose={() => setSettingsOpen(false)} animation={onAnimation ? animation : undefined} onAnimation={onAnimation} />
+      )}
       {caption && <div className="caption">{caption}</div>}
       <nav className={"hud" + (hudVisible || settingsOpen ? "" : " hidden")} onPointerDown={(e) => e.stopPropagation()}>
         {onExit && <IconButton icon="close" onClick={onExit} title="Back to editing (Esc)" />}

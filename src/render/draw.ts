@@ -28,10 +28,52 @@ const pathCache = new WeakMap<StrokeItem, Path2D>();
 export function ribbonPath(s: StrokeItem): Path2D {
   const cached = pathCache.get(s);
   if (cached) return cached;
-  const path = new Path2D();
+  const path = buildRibbon(s.ribbon.centers, s.ribbon.halfWidths, s.ribbon.halfWidths.length);
+  pathCache.set(s, path);
+  return path;
+}
+
+const arcCache = new WeakMap<StrokeItem, Float64Array>();
+
+/** Cumulative length along a stroke's centreline. */
+export function strokeArc(s: StrokeItem): Float64Array {
+  let a = arcCache.get(s);
+  if (a) return a;
+  const c = s.ribbon.centers;
+  const n = s.ribbon.halfWidths.length;
+  a = new Float64Array(Math.max(1, n));
+  for (let i = 1; i < n; i++) a[i] = a[i - 1] + Math.hypot(c[2 * i] - c[2 * i - 2], c[2 * i + 1] - c[2 * i - 1]);
+  arcCache.set(s, a);
+  return a;
+}
+
+/** The ribbon written up to fraction [t] of its length: the pen replaying the stroke. */
+function partialRibbonPath(s: StrokeItem, t: number): Path2D {
+  const arc = strokeArc(s);
+  const n = s.ribbon.halfWidths.length;
+  const target = arc[n - 1] * t;
+  let k = 0;
+  while (k < n - 1 && arc[k + 1] <= target) k++;
   const c = s.ribbon.centers;
   const h = s.ribbon.halfWidths;
-  const n = h.length;
+  const centers = new Float64Array(2 * (k + 2));
+  const halves = new Float64Array(k + 2);
+  centers.set(c.subarray(0, 2 * (k + 1)));
+  halves.set(h.subarray(0, k + 1));
+  let m = k + 1;
+  if (k < n - 1) {
+    const span = arc[k + 1] - arc[k];
+    const f = span > 0 ? (target - arc[k]) / span : 0;
+    centers[2 * m] = c[2 * k] + (c[2 * k + 2] - c[2 * k]) * f;
+    centers[2 * m + 1] = c[2 * k + 1] + (c[2 * k + 3] - c[2 * k + 1]) * f;
+    halves[m] = h[k] + (h[k + 1] - h[k]) * f;
+    m++;
+  }
+  return buildRibbon(centers, halves, m);
+}
+
+function buildRibbon(c: ArrayLike<number>, h: ArrayLike<number>, n: number): Path2D {
+  const path = new Path2D();
   for (let i = 0; i < n; i++) {
     const x = c[2 * i];
     const y = c[2 * i + 1];
@@ -70,20 +112,21 @@ export function ribbonPath(s: StrokeItem): Path2D {
     for (let k = 1; k < 4; k++) path.lineTo(p[2 * order[k]], p[2 * order[k] + 1]);
     path.closePath();
   }
-  pathCache.set(s, path);
   return path;
 }
 
-function drawStroke(ctx: CanvasRenderingContext2D, s: StrokeItem) {
+function drawStroke(ctx: CanvasRenderingContext2D, s: StrokeItem, written = 1) {
   const color = s.color;
   ctx.save();
   ctx.globalAlpha *= s.alpha;
   ctx.globalCompositeOperation = s.blend;
   if (s.dashed && s.ribbon.halfWidths.length >= 2) {
     const c = s.ribbon.centers;
+    const arc = strokeArc(s);
+    const limit = arc[arc.length - 1] * written;
     ctx.beginPath();
     ctx.moveTo(c[0], c[1]);
-    for (let i = 2; i < c.length; i += 2) ctx.lineTo(c[i], c[i + 1]);
+    for (let i = 2; i < c.length && arc[i / 2] <= limit; i += 2) ctx.lineTo(c[i], c[i + 1]);
     ctx.strokeStyle = css(color, 1);
     ctx.lineWidth = s.dashed.width;
     ctx.lineCap = "round";
@@ -92,7 +135,37 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: StrokeItem) {
     ctx.stroke();
   } else {
     ctx.fillStyle = css(color, 1);
-    ctx.fill(ribbonPath(s), "nonzero");
+    ctx.fill(written >= 1 ? ribbonPath(s) : partialRibbonPath(s, written), "nonzero");
+  }
+  ctx.restore();
+}
+
+export type RevealStyle = "instant" | "fade" | "write" | "wipe";
+
+/** How far an item is into its reveal animation; omitted = fully shown. */
+export interface RevealState {
+  style: RevealStyle;
+  /** 0..1 */
+  p: number;
+  /** Wipe: the whole step's bounds, swept left to right. */
+  area?: Bounds;
+}
+
+function drawRevealing(ctx: CanvasRenderingContext2D, doc: CanvasDoc, it: CanvasItem, onAsset: () => void, r?: RevealState) {
+  if (!r || r.p >= 1 || r.style === "instant") return drawItem(ctx, doc, it, onAsset);
+  if (r.p <= 0) return;
+  ctx.save();
+  if (r.style === "write" && it.kind === "stroke") {
+    drawStroke(ctx, it, r.p);
+  } else if (r.style === "wipe") {
+    const a = r.area ?? it.bounds;
+    ctx.beginPath();
+    ctx.rect(a.minX - 50, a.minY - 50, (a.maxX - a.minX + 100) * r.p, a.maxY - a.minY + 100);
+    ctx.clip();
+    drawItem(ctx, doc, it, onAsset);
+  } else {
+    ctx.globalAlpha *= r.p;
+    drawItem(ctx, doc, it, onAsset);
   }
   ctx.restore();
 }
@@ -289,6 +362,10 @@ export interface RenderOptions {
   accent?: Rgba;
   /** Drawn last, in content coordinates (the presenter's laser). */
   overlay?: (ctx: CanvasRenderingContext2D, view: View) => void;
+  /** Items mid-animation in the presenter. */
+  reveal?: (it: CanvasItem) => RevealState | undefined;
+  /** Numbered markers (step numbers in the editor), drawn at constant screen size. */
+  badges?: { x: number; y: number; label: string; color: Rgba }[];
   onAsset?: () => void;
 }
 
@@ -337,7 +414,7 @@ export function render(ctx: CanvasRenderingContext2D, o: RenderOptions) {
     glow(ctx, o.hover, 2.5 / view.zoom);
     ctx.restore();
   }
-  for (const it of o.doc.items) if (onScreen(it)) drawItem(ctx, o.doc, it, onAsset);
+  for (const it of o.doc.items) if (onScreen(it)) drawRevealing(ctx, o.doc, it, onAsset, o.reveal?.(it));
   if (o.flagged) {
     const pad = 6 / view.zoom;
     ctx.save();
@@ -378,6 +455,27 @@ export function render(ctx: CanvasRenderingContext2D, o: RenderOptions) {
     ctx.restore();
   }
   o.overlay?.(ctx, view);
+  if (o.badges?.length) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.font = "600 12px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const b of o.badges) {
+      const x = (b.x - view.scrollX) * view.zoom - 8;
+      const y = (b.y - view.scrollY) * view.zoom - 8;
+      if (x < -20 || y < -20 || x > o.width + 20 || y > o.height + 20) continue;
+      const r = b.label.length > 1 ? 12 : 10;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = css(b.color, 1);
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.stroke();
+      ctx.fillStyle = "#1b1b1f";
+      ctx.fillText(b.label, x, y + 0.5);
+    }
+  }
 }
 
 /** View that fits [b] into a w×h viewport with a margin, plus extra room for overlaid bars. */

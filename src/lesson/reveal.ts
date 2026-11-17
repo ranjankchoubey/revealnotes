@@ -1,5 +1,14 @@
 import type { Bounds, CanvasDoc } from "../format/xcanvas";
-import type { PaperMode } from "../render/draw";
+import type { PaperMode, RevealStyle } from "../render/draw";
+
+export type RevealSpeed = "slow" | "normal" | "fast";
+export interface Animation {
+  style: RevealStyle;
+  speed: RevealSpeed;
+}
+export const DEFAULT_ANIMATION: Animation = { style: "write", speed: "normal" };
+const STYLES: RevealStyle[] = ["instant", "fade", "write", "wipe"];
+const SPEEDS: RevealSpeed[] = ["slow", "normal", "fast"];
 
 export const REVEAL_FILE = "reveal.json";
 
@@ -20,6 +29,8 @@ export interface RevealFile {
   manifest_sha256: string;
   item_count?: number;
   paper?: PaperMode;
+  /** How a step appears when presented. */
+  animation?: Animation;
   /** Optional per-step metadata, keyed by step number. */
   steps?: Record<string, { name?: string }>;
   objects: Record<string, RevealObject>;
@@ -51,6 +62,7 @@ export interface Lesson extends Steps {
   /** The loaded file, kept so unknown fields and orphaned assignments are preserved on save. */
   base: RevealFile | null;
   paper: PaperMode;
+  animation: Animation;
 }
 
 export function parseReveal(text: string): RevealFile {
@@ -82,7 +94,7 @@ export function rememberPaper(p: PaperMode) {
 }
 
 export function newLesson(ids: string[]): Lesson {
-  return { stages: new Map(ids.map((id) => [id, 0])), names: new Map(), base: null, paper: preferredPaper() };
+  return { stages: new Map(ids.map((id) => [id, 0])), names: new Map(), base: null, paper: preferredPaper(), animation: DEFAULT_ANIMATION };
 }
 
 /** Apply a reveal file to the document by object ID (never by index) and report differences. */
@@ -121,8 +133,13 @@ export function applyReveal(doc: CanvasDoc, ids: string[], file: RevealFile): { 
     const n = Number(k);
     if (Number.isInteger(n) && n > 0 && typeof v?.name === "string" && v.name.trim()) names.set(n, v.name);
   }
+  const a = file.animation;
+  const animation: Animation = {
+    style: a && STYLES.includes(a.style) ? a.style : DEFAULT_ANIMATION.style,
+    speed: a && SPEEDS.includes(a.speed) ? a.speed : DEFAULT_ANIMATION.speed,
+  };
   return {
-    lesson: { stages, names, base: file, paper: file.paper === "dark" ? "dark" : "light" },
+    lesson: { stages, names, base: file, paper: file.paper === "dark" ? "dark" : "light", animation },
     report: {
       docChanged: file.manifest_sha256 !== doc.manifestSha256,
       docNameDiffers: file.document !== doc.fileName,
@@ -191,6 +208,7 @@ export function serializeReveal(doc: CanvasDoc, ids: string[], lesson: Lesson, k
     manifest_sha256: doc.manifestSha256,
     item_count: ids.length,
     paper: lesson.paper,
+    animation: lesson.animation,
     steps,
     objects,
   };

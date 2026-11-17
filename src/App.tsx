@@ -187,7 +187,17 @@ export function App() {
   };
 
   if (loaded && lesson && mode === "present") {
-    return <Presenter doc={loaded.doc} ids={loaded.ids} steps={lesson} paper={lesson.paper} onExit={exitPresent} />;
+    return (
+      <Presenter
+        doc={loaded.doc}
+        ids={loaded.ids}
+        steps={lesson}
+        paper={lesson.paper}
+        animation={lesson.animation}
+        onAnimation={(animation) => update({ animation }, false)}
+        onExit={exitPresent}
+      />
+    );
   }
 
   if (loaded && lesson) {
@@ -216,6 +226,8 @@ export function App() {
           onLoadSteps={() => stepsInput.current?.click()}
           onPresent={present}
           fresh={fresh}
+          animation={lesson.animation}
+          onAnimation={(animation) => update({ animation }, false)}
           onSeen={(seen) => {
             if (!seen.some((id) => fresh.has(id))) return;
             const next = new Set(fresh);

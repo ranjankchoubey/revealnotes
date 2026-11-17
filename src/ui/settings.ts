@@ -10,10 +10,12 @@ export interface Settings {
   /** "auto": once a stylus is used, the pen selects and fingers pan. */
   stylus: "auto" | "always" | "never";
   selectTool: "lasso" | "box";
+  /** Numbered markers on each group of marked strokes in the editor. */
+  badges: boolean;
 }
 
 const KEY = "revealnotes:settings";
-const DEFAULTS: Settings = { cameraFollow: true, laserSeconds: 2, laserColor: "#ff3b3b", stylus: "auto", selectTool: "lasso" };
+const DEFAULTS: Settings = { cameraFollow: true, laserSeconds: 2, laserColor: "#ff3b3b", stylus: "auto", selectTool: "lasso", badges: true };
 export const LASER_COLORS = ["#ff3b3b", "#2ee66b", "#2e9bff", "#ffd400"];
 
 function load(): Settings {

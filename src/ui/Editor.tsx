@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Bounds, CanvasDoc, CanvasItem, Rgba } from "../format/xcanvas";
 import { fitView, type PaperMode, type View } from "../render/draw";
 import { boxRing, pickAt, ringMembers } from "../render/hit";
-import { compactStages, usedStages, type Steps } from "../lesson/reveal";
+import { compactStages, usedStages, type Animation, type Steps } from "../lesson/reveal";
 import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
 import { Icon, IconButton } from "./icons";
 import { useMedia } from "./useMedia";
@@ -39,6 +39,8 @@ interface Props {
   /** IDs new or changed since the steps were saved, outlined until assigned. */
   fresh: Set<string>;
   onSeen: (ids: string[]) => void;
+  animation: Animation;
+  onAnimation: (a: Animation) => void;
 }
 
 export function Editor(p: Props) {
@@ -82,6 +84,78 @@ export function Editor(p: Props) {
   const assignedAny = usedStages(stages).length > 0;
 
   const fit = useCallback(() => size.w > 0 && setView(fitView(doc.bounds, size.w, size.h, 16)), [doc, size]);
+  const [fitOpen, setFitOpen] = useState(false);
+
+  /** What the fit modes fit: the page in view for a notebook, else the whole canvas. */
+  const fitTarget = useCallback((): Bounds => {
+    const pages = doc.pages;
+    if (!pages || !view || size.h === 0) return doc.bounds;
+    const cy = view.scrollY + size.h / (2 * view.zoom);
+    return (pages.find((pg) => cy < pg.bounds.maxY + 24) ?? pages[pages.length - 1]).bounds;
+  }, [doc, view, size]);
+
+  // XNotes' fit modes: whole page/canvas, its width, its height, or actual size.
+  const fitMode = (mode: "screen" | "width" | "height" | "actual") => {
+    if (size.w === 0 || zoomLocked) return;
+    const t = fitTarget();
+    const M = 16;
+    const tw = Math.max(1, t.maxX - t.minX);
+    const th = Math.max(1, t.maxY - t.minY);
+    const cur = view ?? fitView(t, size.w, size.h, M);
+    const cx = cur.scrollX + size.w / (2 * cur.zoom);
+    const cy = cur.scrollY + size.h / (2 * cur.zoom);
+    userMoved.current = mode !== "screen" || !!doc.pages;
+    setFitOpen(false);
+    if (mode === "screen") return setView(fitView(t, size.w, size.h, M));
+    if (mode === "actual") return setView({ zoom: 1, scrollX: cx - size.w / 2, scrollY: cy - size.h / 2 });
+    if (mode === "width") {
+      const zoom = (size.w - 2 * M) / tw;
+      const inside = cy > t.minY && cy < t.maxY;
+      return setView({
+        zoom,
+        scrollX: t.minX - M / zoom,
+        scrollY: inside && !doc.pages ? cy - size.h / (2 * zoom) : t.minY - M / zoom,
+      });
+    }
+    const zoom = (size.h - 2 * M) / th;
+    return setView({ zoom, scrollX: (t.minX + t.maxX) / 2 - size.w / (2 * zoom), scrollY: t.minY - M / zoom });
+  };
+  const snapZooms = useMemo(() => {
+    if (size.w === 0) return [];
+    const t = fitTarget();
+    return [(size.w - 32) / Math.max(1, t.maxX - t.minX), fitView(t, size.w, size.h, 16).zoom];
+  }, [fitTarget, size]);
+
+  const badges = useMemo(() => {
+    if (!settings.badges) return [];
+    const byStage = new Map<number, CanvasItem[]>();
+    for (const it of doc.items) {
+      const s = stageOf(it);
+      if (s > 0) byStage.set(s, [...(byStage.get(s) ?? []), it]);
+    }
+    // One number per cluster of the step's strokes (bounds within GAP, about a word gap plus a line), at its top-left.
+    const GAP = 120;
+    const out: { x: number; y: number; label: string; color: Rgba }[] = [];
+    for (const [s, items] of byStage) {
+      const parent = items.map((_, i) => i);
+      const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+      for (let i = 0; i < items.length; i++) {
+        for (let j = i + 1; j < items.length; j++) {
+          const a = items[i].bounds;
+          const b = items[j].bounds;
+          if (a.minX - GAP <= b.maxX && b.minX - GAP <= a.maxX && a.minY - GAP <= b.maxY && b.minY - GAP <= a.maxY) parent[find(i)] = find(j);
+        }
+      }
+      const corner = new Map<number, [number, number]>();
+      items.forEach((it, i) => {
+        const r = find(i);
+        const c = corner.get(r);
+        corner.set(r, c ? [Math.min(c[0], it.bounds.minX), Math.min(c[1], it.bounds.minY)] : [it.bounds.minX, it.bounds.minY]);
+      });
+      for (const [x, y] of corner.values()) out.push({ x, y, label: String(s), color: stepColor(s) });
+    }
+    return out;
+  }, [doc, stageOf, settings.badges]);
   // Keep the whole canvas fitted as the window resizes, until the user pans or zooms.
   const userMoved = useRef(false);
   useEffect(() => {
@@ -148,11 +222,13 @@ export function Editor(p: Props) {
       else if (k === "n" || e.key === "+") newStep();
       else if (k === "p") p.onPresent();
       else if (k === "f") { userMoved.current = false; fit(); }
+      else if (k === "w") fitMode("width");
+      else if (k === "h") fitMode("height");
       else if (k === "l") setZoomLocked((z) => !z);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [p, steps, choose, newStep, fit, step]);
+  }, [p, steps, choose, newStep, fit, step, fitMode]);
 
   const rect = (a: { x: number; y: number }, b: { x: number; y: number }): Bounds => ({
     minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y),
@@ -224,9 +300,19 @@ export function Editor(p: Props) {
         {wide ? stepsGroup : <span className="spacer" />}
         <div className="group">
           <IconButton icon="zoomOut" onClick={() => zoomBy(1 / ZOOM_STEP)} disabled={zoomLocked} title="Zoom out" />
-          <button className="pct" onClick={() => { userMoved.current = false; fit(); }} title="Fit to screen (F)">
-            {view ? Math.round(view.zoom * 100) : 100}%
-          </button>
+          <div className="fitwrap">
+            <button className="pct" onClick={() => setFitOpen((o) => !o)} title="Fit: width, height, screen">
+              {view ? Math.round(view.zoom * 100) : 100}%
+            </button>
+            {fitOpen && (
+              <div className="menu">
+                <button onClick={() => fitMode("width")}>Fit width <kbd>W</kbd></button>
+                <button onClick={() => fitMode("height")}>Fit height <kbd>H</kbd></button>
+                <button onClick={() => fitMode("screen")}>Fit screen <kbd>F</kbd></button>
+                <button onClick={() => fitMode("actual")}>100%</button>
+              </div>
+            )}
+          </div>
           <IconButton icon="zoomIn" onClick={() => zoomBy(ZOOM_STEP)} disabled={zoomLocked} title="Zoom in" />
           <IconButton
             icon={zoomLocked ? "lock" : "unlock"}
@@ -255,6 +341,8 @@ export function Editor(p: Props) {
           onPaper={p.onPaper}
           onLoadSteps={() => { setSettingsOpen(false); p.onLoadSteps(); }}
           onExport={() => { setSettingsOpen(false); p.onExport(); }}
+          animation={p.animation}
+          onAnimation={p.onAnimation}
         />
       )}
 
@@ -264,6 +352,7 @@ export function Editor(p: Props) {
           view={view}
           zoomLocked={zoomLocked}
           fingerPans={fingerPans}
+          snapZooms={snapZooms}
           onView={(v) => {
             userMoved.current = true;
             setView(v);
@@ -327,6 +416,7 @@ export function Editor(p: Props) {
             lasso,
             flagged: p.fresh.size ? (it) => p.fresh.has(idOf.get(it)!) : undefined,
             accent: stepColor(active),
+            badges,
           }}
         />
         {!noticeHidden && (p.notice || doc.warnings.length > 0) && (

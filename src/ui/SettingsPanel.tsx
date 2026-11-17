@@ -1,4 +1,5 @@
-import type { PaperMode } from "../render/draw";
+import type { PaperMode, RevealStyle } from "../render/draw";
+import type { Animation, RevealSpeed } from "../lesson/reveal";
 import { IconButton } from "./icons";
 import { LASER_COLORS, setSettings, useSettings, type Settings } from "./settings";
 
@@ -9,6 +10,8 @@ interface Props {
   onPaper?: (p: PaperMode) => void;
   onLoadSteps?: () => void;
   onExport?: () => void;
+  animation?: Animation;
+  onAnimation?: (a: Animation) => void;
 }
 
 function Seg<T extends string | number>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
@@ -48,6 +51,33 @@ export function SettingsPanel(p: Props) {
             <span>Stylus: pen selects, fingers pan</span>
             <Seg value={s.stylus} options={[["auto", "After first pen use"], ["always", "Always"], ["never", "Never"]]} onChange={(v) => set({ stylus: v })} />
           </div>
+          <div className="row">
+            <span>Step numbers on strokes</span>
+            <Seg value={s.badges ? "on" : "off"} options={[["on", "Show"], ["off", "Hide"]]} onChange={(v) => set({ badges: v === "on" })} />
+          </div>
+        </>
+      )}
+
+      {p.animation && p.onAnimation && (
+        <>
+          <div className="row col">
+            <span>Reveal style</span>
+            <Seg<RevealStyle>
+              value={p.animation.style}
+              options={[["write", "Write"], ["fade", "Fade"], ["wipe", "Wipe"], ["instant", "Instant"]]}
+              onChange={(style) => p.onAnimation!({ ...p.animation!, style })}
+            />
+          </div>
+          {p.animation.style !== "instant" && (
+            <div className="row">
+              <span>Reveal speed</span>
+              <Seg<RevealSpeed>
+                value={p.animation.speed}
+                options={[["slow", "Slow"], ["normal", "Normal"], ["fast", "Fast"]]}
+                onChange={(speed) => p.onAnimation!({ ...p.animation!, speed })}
+              />
+            </div>
+          )}
         </>
       )}
 

@@ -114,9 +114,12 @@ describe("step names", () => {
     lesson.stages.set(ids[1], 2);
     lesson.names.set(2, "Brute force");
     lesson.names.set(9, "unused step is not saved");
+    lesson.animation = { style: "wipe", speed: "fast" };
     const file = JSON.parse(JSON.stringify(serializeReveal(doc, ids, lesson, true)));
     expect(file.steps).toEqual({ "2": { name: "Brute force" } });
     expect([...applyReveal(doc, ids, file).lesson.names]).toEqual([[2, "Brute force"]]);
+    expect(applyReveal(doc, ids, file).lesson.animation).toEqual({ style: "wipe", speed: "fast" });
+    expect(applyReveal(doc, ids, { ...file, animation: undefined }).lesson.animation).toEqual({ style: "write", speed: "normal" });
   });
 });
 

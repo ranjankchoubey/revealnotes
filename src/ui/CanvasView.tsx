@@ -30,6 +30,8 @@ interface Props {
   zoomLocked?: boolean;
   /** Stylus mode: a single finger pans; only pen and mouse reach the tool handlers. */
   fingerPans?: boolean;
+  /** Zooms a pinch sticks to when close (fit width / fit screen), like XNotes' fit magnet. */
+  snapZooms?: number[];
   className?: string;
 }
 
@@ -191,7 +193,9 @@ export function CanvasView(p: Props) {
             const d = Math.hypot(a.x - b.x, a.y - b.y);
             const mx = (a.x + b.x) / 2;
             const my = (a.y + b.y) / 2;
-            const z = zoomAt(s.view, s.mx, s.my, p.zoomLocked ? 1 : d / Math.max(1, s.d));
+            let z = zoomAt(s.view, s.mx, s.my, p.zoomLocked ? 1 : d / Math.max(1, s.d));
+            const magnet = p.zoomLocked ? undefined : p.snapZooms?.find((t) => Math.abs(z.zoom / t - 1) < 0.05);
+            if (magnet) z = zoomAt(s.view, s.mx, s.my, magnet / s.view.zoom);
             p.onView({ ...z, scrollX: z.scrollX - (mx - s.mx) / z.zoom, scrollY: z.scrollY - (my - s.my) / z.zoom });
           } else if (gesture.current === "pan") {
             const q = local(e);
