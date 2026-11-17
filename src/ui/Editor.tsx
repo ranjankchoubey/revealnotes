@@ -28,6 +28,7 @@ interface Props {
   onPaper: (p: PaperMode) => void;
   onSave: () => void;
   onExport: () => void;
+  onLoadSteps: () => void;
   onPresent: () => void;
   onClose: () => void;
   onDismissNotice: () => void;
@@ -210,7 +211,12 @@ export function Editor(p: Props) {
       )}
 
       <footer className="stepbar">
-        {!assignedAny && <div className="hint">Pick a step, then tap strokes or drag a box around them.</div>}
+        {!assignedAny && (
+          <div className="hint">
+            Pick a step, then tap strokes or drag a box around them.{" "}
+            <button className="link" onClick={p.onLoadSteps}>Already have a .reveal.json? Load it</button>
+          </div>
+        )}
         {listOpen && (
           <div className="steplist">
             {steps.map((s) => (

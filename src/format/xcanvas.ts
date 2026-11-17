@@ -53,6 +53,19 @@ export interface OtherItem extends ItemBase {
   rawKind: string;
 }
 
+export interface ShapeItem extends ItemBase {
+  kind: "shape";
+  /** Polygon/polyline vertices, or null for an ellipse filling [ellipse]. */
+  points: [number, number][] | null;
+  ellipse: Bounds | null;
+  closed: boolean;
+  arrow: boolean;
+  stroke: Rgba | null;
+  width: number;
+  fill: Rgba | null;
+  dash: [number, number] | null;
+}
+
 export interface TextItem extends ItemBase {
   kind: "text";
   text: string;
@@ -67,7 +80,7 @@ export interface TextItem extends ItemBase {
   lineHeight: number;
 }
 
-export type CanvasItem = StrokeItem | ImageItem | TextItem | OtherItem;
+export type CanvasItem = StrokeItem | ImageItem | TextItem | ShapeItem | OtherItem;
 
 /** One page of an .xnote, placed in document coordinates. */
 export interface PageInfo {
@@ -282,6 +295,50 @@ function parseText(raw: Record<string, unknown>, index: number, dx: number, dy: 
   };
 }
 
+const OPEN_SHAPES = new Set(["line", "arrow", "polyline", "curve"]);
+
+/**
+ * Common XNotes shapes (rectangle, ellipse/circle, line, arrow, polygon, polyline, triangle...).
+ * `points`, when present, is the already-transformed outline XNotes saves; otherwise start/end span the box.
+ * Returns null for anything we can't draw faithfully, so it falls back to a placeholder.
+ */
+function parseShape(raw: Record<string, unknown>, index: number, dx: number, dy: number, note: (w: string) => void): ShapeItem | null {
+  const kind = typeof raw.shape === "string" ? raw.shape : "";
+  const pt = (v: unknown): [number, number] | null =>
+    Array.isArray(v) && typeof v[0] === "number" && typeof v[1] === "number" ? [v[0] + dx, v[1] + dy] : null;
+  const start = pt(raw.start);
+  const end = pt(raw.end);
+  const pts = Array.isArray(raw.points) ? (raw.points as unknown[]).map(pt).filter((p): p is [number, number] => !!p) : [];
+  let points: [number, number][] | null = null;
+  let ellipse: Bounds | null = null;
+  if (pts.length >= 2) points = pts;
+  else if (start && end) {
+    const [x0, y0] = start;
+    const [x1, y1] = end;
+    const box = { minX: Math.min(x0, x1), minY: Math.min(y0, y1), maxX: Math.max(x0, x1), maxY: Math.max(y0, y1) };
+    if (kind === "rectangle" || kind === "square") points = [[box.minX, box.minY], [box.maxX, box.minY], [box.maxX, box.maxY], [box.minX, box.maxY]];
+    else if (kind === "ellipse" || kind === "circle") ellipse = box;
+    else if (kind === "line" || kind === "arrow") points = [start, end];
+  }
+  if (!points && !ellipse) return null;
+  if (!pts.length && num(raw.angle, 0) !== 0) note("rotated shape");
+  if (raw.label) note("shape label (not shown)");
+  if (kind === "arrow") note("arrow head");
+  const width = num(raw.stroke_width, 2);
+  const b = emptyBounds();
+  for (const [x, y] of points ?? []) grow(b, x, y, width / 2);
+  if (ellipse) unionInto(b, { minX: ellipse.minX - width / 2, minY: ellipse.minY - width / 2, maxX: ellipse.maxX + width / 2, maxY: ellipse.maxY + width / 2 });
+  return {
+    kind: "shape", index, raw, bounds: b, points, ellipse,
+    closed: !OPEN_SHAPES.has(kind),
+    arrow: kind === "arrow",
+    stroke: rgba(raw.stroke_rgba),
+    width,
+    fill: rgba(raw.fill_rgba),
+    dash: raw.dashed === true ? [num(raw.dash_length, 10), num(raw.dash_gap, 8)] : null,
+  };
+}
+
 interface ParseCtx {
   assets: Map<string, string>;
   items: CanvasItem[];
@@ -294,6 +351,7 @@ function parseItems(rawItems: unknown, ctx: ParseCtx, dx: number, dy: number, pa
     if (!raw || typeof raw !== "object") continue;
     const index = ctx.items.length;
     const kind = typeof raw.kind === "string" ? raw.kind : "?";
+    const shape = kind === "shape" && !raw.connector ? parseShape(raw, index, dx, dy, ctx.note) : null;
     let item: CanvasItem | null = null;
     if (kind === "stroke") {
       const s = parseStroke(raw, index, dx, dy);
@@ -302,6 +360,8 @@ function parseItems(rawItems: unknown, ctx: ParseCtx, dx: number, dy: number, pa
     } else if (kind === "text" && page !== undefined) {
       ctx.note("text box (font and wrapping approximate)");
       item = parseText(raw, index, dx, dy);
+    } else if (shape) {
+      item = shape;
     } else if (kind === "image" && typeof raw.asset === "string" && ctx.assets.has(raw.asset) && Array.isArray(raw.rect)) {
       const r = (raw.rect as unknown[]).slice(0, 4).map((v) => num(v, 0));
       const approx: string[] = [];

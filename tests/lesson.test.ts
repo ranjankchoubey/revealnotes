@@ -46,6 +46,23 @@ describe("xnote (synthetic, built from the sample's strokes)", () => {
   });
 });
 
+describe("xnote (real file from XNotes)", () => {
+  test("one landscape page, grid, 25 strokes and 2 real shapes", async () => {
+    const doc = await loadDocument("untitled_2.xnote", new Uint8Array(readFileSync(new URL("./fixtures/untitled_2.xnote", import.meta.url).pathname)));
+    expect(doc.pages!.length).toBe(1);
+    expect(doc.pages![0].pattern).toBe("grid");
+    expect(doc.pages![0].bounds.maxX).toBeCloseTo(1753.94, 1);
+    expect(doc.items.filter((i) => i.kind === "stroke").length).toBe(25);
+    const shapes = doc.items.filter((i) => i.kind === "shape");
+    expect(shapes.length).toBe(2);
+    const [rect, tri] = shapes as Extract<typeof shapes[number], { kind: "shape" }>[];
+    expect(rect.points!.length).toBe(4);
+    expect(tri.points!.length).toBe(3);
+    expect(tri.closed).toBe(true);
+    expect(doc.warnings).toEqual(["Notebook (.xnote) support is experimental. Please compare with XNotes."]);
+  });
+});
+
 describe("step names", () => {
   test("round-trip through reveal.json", async () => {
     const doc = await loadXCanvas("untitled_1.xcanvas", new Uint8Array(readFileSync(new URL("./fixtures/untitled_1.xcanvas", import.meta.url).pathname)));

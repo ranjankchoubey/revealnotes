@@ -101,6 +101,43 @@ const imageCache = new Map<string, HTMLImageElement>();
 
 function drawItem(ctx: CanvasRenderingContext2D, doc: CanvasDoc, it: CanvasItem, onAsset: () => void) {
   if (it.kind === "stroke") return drawStroke(ctx, it);
+  if (it.kind === "shape") {
+    ctx.save();
+    ctx.beginPath();
+    if (it.ellipse) {
+      const e = it.ellipse;
+      ctx.ellipse((e.minX + e.maxX) / 2, (e.minY + e.maxY) / 2, (e.maxX - e.minX) / 2, (e.maxY - e.minY) / 2, 0, 0, Math.PI * 2);
+    } else if (it.points) {
+      it.points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      if (it.closed) ctx.closePath();
+    }
+    if (it.fill && it.closed) {
+      ctx.fillStyle = css(it.fill);
+      ctx.fill();
+    }
+    if (it.stroke && it.width > 0) {
+      ctx.strokeStyle = css(it.stroke);
+      ctx.lineWidth = it.width;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      if (it.dash) ctx.setLineDash(it.dash);
+      ctx.stroke();
+      if (it.arrow && it.points && it.points.length >= 2) {
+        const [x0, y0] = it.points[it.points.length - 2];
+        const [x1, y1] = it.points[it.points.length - 1];
+        const a = Math.atan2(y1 - y0, x1 - x0);
+        const len = Math.max(12, it.width * 5);
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(x1 - len * Math.cos(a - 0.45), y1 - len * Math.sin(a - 0.45));
+        ctx.lineTo(x1, y1);
+        ctx.lineTo(x1 - len * Math.cos(a + 0.45), y1 - len * Math.sin(a + 0.45));
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+    return;
+  }
   if (it.kind === "text") {
     ctx.save();
     ctx.font = `${it.fontSize}px ${it.font}`;

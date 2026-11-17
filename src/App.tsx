@@ -43,6 +43,7 @@ export function App() {
   const [pending, setPending] = useState<{ text: string; document: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const stepsInput = useRef<HTMLInputElement>(null);
   // Only autosave after an edit in this tab: opening (or a stale second tab) must not overwrite a newer draft.
   const edited = useRef(false);
 
@@ -137,6 +138,20 @@ export function App() {
     }
   }, [loaded, lesson]);
 
+  const loadSteps = async (f: File) => {
+    if (!loaded || !lesson) return;
+    try {
+      const res = applyReveal(loaded.doc, loaded.ids, parseReveal(await f.text()));
+      edited.current = true;
+      setHistory((h) => [...h, { stages: lesson.stages, names: lesson.names }]);
+      setLesson(res.lesson);
+      setSaveState("unsaved");
+      setNotice(changeNotice(res.report) ?? `Loaded ${usedStages(res.lesson.stages).length} steps from ${f.name}.`);
+    } catch (e) {
+      setNotice(`Could not load steps: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
   const update = (next: Partial<Lesson>, record: boolean) => {
     if (!lesson) return;
     edited.current = true;
@@ -151,30 +166,44 @@ export function App() {
 
   if (loaded && lesson) {
     return (
-      <Editor
-        doc={loaded.doc}
-        ids={loaded.ids}
-        steps={lesson}
-        paper={lesson.paper}
-        notice={notice}
-        saveState={saveState}
-        canUndo={history.length > 0}
-        onSteps={(s, record) => update(s, record)}
-        onUndo={() => {
-          if (!history.length) return;
-          update(history[history.length - 1], false);
-          setHistory(history.slice(0, -1));
-        }}
-        onPaper={(paper: PaperMode) => update({ paper }, false)}
-        onSave={save}
-        onExport={exportHtml}
-        onPresent={() => setMode("present")}
-        onClose={() => {
-          setLoaded(null);
-          setLesson(null);
-        }}
-        onDismissNotice={() => setNotice(null)}
-      />
+      <>
+        <Editor
+          doc={loaded.doc}
+          ids={loaded.ids}
+          steps={lesson}
+          paper={lesson.paper}
+          notice={notice}
+          saveState={saveState}
+          canUndo={history.length > 0}
+          onSteps={(s, record) => update(s, record)}
+          onUndo={() => {
+            if (!history.length) return;
+            update(history[history.length - 1], false);
+            setHistory(history.slice(0, -1));
+          }}
+          onPaper={(paper: PaperMode) => update({ paper }, false)}
+          onSave={save}
+          onExport={exportHtml}
+          onLoadSteps={() => stepsInput.current?.click()}
+          onPresent={() => setMode("present")}
+          onClose={() => {
+            setLoaded(null);
+            setLesson(null);
+          }}
+          onDismissNotice={() => setNotice(null)}
+        />
+        <input
+          ref={stepsInput}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void loadSteps(f);
+            e.target.value = "";
+          }}
+        />
+      </>
     );
   }
 
@@ -205,6 +234,10 @@ export function App() {
           <>
             <button className="primary big" onClick={() => fileInput.current?.click()}>Open notes</button>
             <p className="muted">or drop your file here</p>
+            <p className="tip">
+              <b>Already marked steps?</b> Select the notes file <i>and</i> its <code>.reveal.json</code> together (⌘/Ctrl-click),
+              or drop both. On the same browser, just the notes file is enough.
+            </p>
           </>
         )}
         <ol className="how">
@@ -214,7 +247,6 @@ export function App() {
         </ol>
         <p className="muted small">
           Your notes file is never changed. Steps are kept in this browser and saved as <code>name.reveal.json</code>.
-          On another device, select the notes file and its <code>.reveal.json</code> together.
         </p>
         {error && <p className="error">{error}</p>}
       </div>
