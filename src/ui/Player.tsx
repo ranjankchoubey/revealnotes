@@ -27,6 +27,8 @@ export function Player({ data }: { data: EmbeddedLesson }) {
 
   if (!state) return null;
   if ("error" in state) return <main className="start"><p className="error">Could not open this lesson: {state.error}</p></main>;
+  // Opened from a lessons site (same tab): offer the way back.
+  const fromSite = !!document.referrer && window.history.length > 1;
   return (
     <Presenter
       doc={state.doc}
@@ -34,6 +36,8 @@ export function Player({ data }: { data: EmbeddedLesson }) {
       steps={state.lesson}
       paper={data.reveal.paper === "dark" ? "dark" : "light"}
       animation={state.lesson.animation}
+      onExit={fromSite ? () => window.history.back() : undefined}
+      exitTitle="Back to the lessons (Esc)"
     />
   );
 }

@@ -6,6 +6,8 @@ import { usedStages, type Animation, type Steps } from "../lesson/reveal";
 import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
 import { IconButton } from "./icons";
 import { drawLasers, laserAlpha, type LaserStroke } from "../render/laser";
+import { downloadBlob } from "../lesson/export";
+import { canRecord, formatTime, Recorder, videoExtension } from "./recorder";
 import { useSettings } from "./settings";
 import { SettingsPanel } from "./SettingsPanel";
 
@@ -19,6 +21,9 @@ interface Props {
   onAnimation?: (a: Animation) => void;
   /** Omitted in an exported lesson, which has nothing to go back to. */
   onExit?: () => void;
+  /** Offers video recording, saving as "<name> <date>.mp4"; omitted in exported lessons. */
+  recordName?: string;
+  exitTitle?: string;
 }
 
 type FsDoc = Document & { webkitFullscreenElement?: Element; webkitExitFullscreen?: () => void };
@@ -58,7 +63,7 @@ function union(items: CanvasItem[]): Bounds | null {
   return b;
 }
 
-export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, onAnimation }: Props) {
+export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, onAnimation, recordName, exitTitle = "Back to editing (Esc)" }: Props) {
   const stageOf = useMemo(() => {
     const m = new Map<CanvasItem, number>(doc.items.map((it, i) => [it, lesson.stages.get(ids[i]) ?? 0]));
     return (it: CanvasItem) => m.get(it) ?? 0;
@@ -89,6 +94,101 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const [, setLaserTick] = useState(0);
   const laserLoop = useRef(0);
   const holdMs = settings.laserSeconds * 1000;
+
+  // Video: the framed canvas plus the microphone. Pause any time; Next stays manual.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const recorder = useRef<Recorder | null>(null);
+  const [rec, setRec] = useState<"idle" | "mic" | "countdown" | "recording" | "paused">("idle");
+  const [count, setCount] = useState(0);
+  const [, setRecTick] = useState(0);
+  const [message, setMessage] = useState<string | null>(null);
+  const msgTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const cancelCountdown = useRef(false);
+  const say = useCallback((m: string) => {
+    clearTimeout(msgTimer.current);
+    setMessage(m);
+    msgTimer.current = setTimeout(() => setMessage(null), 5000);
+  }, []);
+
+  const saveVideo = useCallback(
+    async (r: Recorder) => {
+      const length = formatTime(r.elapsed());
+      const blob = await r.stop();
+      const d = new Date();
+      const p2 = (n: number) => String(n).padStart(2, "0");
+      const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}.${p2(d.getMinutes())}`;
+      const name = `${recordName ?? "lesson"} ${stamp}.${videoExtension(r.mime)}`;
+      downloadBlob(name, blob);
+      return `Saved ${name} (${length}) to your downloads.`;
+    },
+    [recordName],
+  );
+
+  const startRecording = useCallback(async () => {
+    if (rec !== "idle") return;
+    setRec("mic");
+    const mic = await Recorder.askMic();
+    cancelCountdown.current = false;
+    setRec("countdown");
+    for (let n = 3; n > 0; n--) {
+      setCount(n);
+      await new Promise((res) => setTimeout(res, 1000));
+      if (cancelCountdown.current) {
+        for (const t of mic?.getTracks() ?? []) t.stop();
+        setRec("idle");
+        return;
+      }
+    }
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg") || "#fff";
+    recorder.current = new Recorder(() => rootRef.current?.querySelector("canvas") ?? null, bg, mic);
+    setRec("recording");
+    if (!mic) say("Recording without sound: the microphone is blocked or missing.");
+  }, [rec, say]);
+
+  const togglePause = useCallback(() => {
+    const r = recorder.current;
+    if (rec === "countdown") {
+      cancelCountdown.current = true;
+      return;
+    }
+    if (!r) return;
+    if (r.paused) {
+      r.resume();
+      setRec("recording");
+    } else {
+      r.pause();
+      setRec("paused");
+    }
+  }, [rec]);
+
+  const stopRecording = useCallback(async () => {
+    const r = recorder.current;
+    if (!r) return;
+    recorder.current = null;
+    setRec("idle");
+    say(await saveVideo(r));
+  }, [saveVideo, say]);
+
+  useEffect(() => {
+    if (rec !== "recording" && rec !== "paused") return;
+    const t = setInterval(() => setRecTick((n) => n + 1), 500);
+    return () => clearInterval(t);
+  }, [rec]);
+
+  // Leaving the presenter mid-recording keeps what was recorded.
+  const saveRef = useRef(saveVideo);
+  saveRef.current = saveVideo;
+  useEffect(
+    () => () => {
+      cancelCountdown.current = true;
+      clearTimeout(msgTimer.current);
+      const r = recorder.current;
+      recorder.current = null;
+      if (r) void saveRef.current(r);
+    },
+    [],
+  );
+  const recording = rec === "recording" || rec === "paused" || rec === "countdown";
 
   const runLaser = useCallback(() => {
     if (laserLoop.current) return;
@@ -345,6 +445,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         case "h": case "H": fitAxis("height"); break;
         case "l": case "L": setZoomLocked((z) => !z); break;
         case "p": case "P": setLaserOn((on) => !on); break;
+        case "k": case "K": togglePause(); break;
         case "+": case "=": zoomBy(ZOOM_STEP); break;
         case "-": case "_": zoomBy(1 / ZOOM_STEP); break;
         case "Escape": if (!isFullscreen()) onExit?.(); break;
@@ -352,11 +453,12 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [next, prev, all, restart, showOverview, onExit, goPage, zoomBy, fitAxis]);
+  }, [next, prev, all, restart, showOverview, onExit, goPage, zoomBy, fitAxis, togglePause]);
 
   return (
-    <div className="presenter">
+    <div className={"presenter" + (recording ? " recording" : "")} ref={rootRef}>
       <CanvasView
+        className={recording ? "framed" : undefined}
         doc={doc}
         view={view}
         zoomLocked={zoomLocked}
@@ -432,8 +534,23 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         <SettingsPanel scope="present" onClose={() => setSettingsOpen(false)} animation={onAnimation ? animation : undefined} onAnimation={onAnimation} />
       )}
       {caption && <div className="caption">{caption}</div>}
+      {message && <div className="toast" onClick={() => setMessage(null)}>{message}</div>}
+      {rec === "countdown" && <div className="countdown" key={count}>{count}</div>}
+      {rec === "paused" && (
+        <button className="paused-badge" onClick={togglePause}>
+          Paused · not recording. Tap to continue (K)
+        </button>
+      )}
+      {recording && rec !== "countdown" && (
+        <div className={"recbar" + (rec === "paused" ? " paused" : "")} onPointerDown={(e) => e.stopPropagation()}>
+          <span className="dot" />
+          <span className="time">{formatTime(recorder.current?.elapsed() ?? 0)}</span>
+          <IconButton icon={rec === "paused" ? "record" : "pause"} onClick={togglePause} title={rec === "paused" ? "Continue recording (K)" : "Pause recording (K)"} />
+          <IconButton icon="stop" onClick={stopRecording} title="Stop and save the video" />
+        </div>
+      )}
       <nav className={"hud" + (hudVisible || settingsOpen ? "" : " hidden")} onPointerDown={(e) => e.stopPropagation()}>
-        {onExit && <IconButton icon="close" onClick={onExit} title="Back to editing (Esc)" />}
+        {onExit && <IconButton icon="close" onClick={onExit} title={exitTitle} />}
         <IconButton icon="prev" onClick={prev} disabled={pos === 0} title="Previous (←)" />
         <div className="dots" title={`${pos} of ${steps.length} steps shown`}>
           {steps.length <= 24
@@ -468,6 +585,9 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           title={laserOn ? "Laser on: draw to point, it fades (P)" : "Laser pen for finger/mouse (P). A stylus always draws the laser."}
         />
         <IconButton icon="fullscreen" onClick={toggleFullscreen} title="Full screen (F)" />
+        {recordName && canRecord() && !recording && (
+          <IconButton icon="record" className="rec" onClick={startRecording} disabled={rec === "mic"} title="Record a video with your voice" />
+        )}
         <IconButton icon="gear" active={settingsOpen} onClick={() => setSettingsOpen((o) => !o)} title="Settings" />
       </nav>
     </div>

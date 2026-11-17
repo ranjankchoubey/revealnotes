@@ -3,6 +3,18 @@ import type { PresenterSettings } from "../ui/settings";
 import type { RevealFile } from "./reveal";
 
 export const EMBED_ID = "revealnotes-data";
+export const META_ID = "revealnotes-meta";
+
+/** What a lessons site reads from an exported file without running it. */
+export interface LessonMeta {
+  title: string;
+  steps: number;
+  stepNames: string[];
+  pages: number | null;
+  exported: string;
+  /** JPEG data URL, 16:9. */
+  thumb: string;
+}
 
 export interface EmbeddedLesson {
   name: string;
@@ -42,7 +54,7 @@ const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "
  * One self-contained HTML file: the presentation-only player bundle (player.js/.css, built next to the
  * app), inlined, plus the original notes file and its steps. Opens offline in any modern browser.
  */
-export async function buildLessonHtml(lesson: EmbeddedLesson): Promise<string> {
+export async function buildLessonHtml(lesson: EmbeddedLesson, meta?: LessonMeta): Promise<string> {
   const get = async (name: string) => {
     const res = await fetch(new URL(name, document.baseURI));
     if (!res.ok) throw new Error(`could not load ${name} (${res.status})`);
@@ -53,14 +65,20 @@ export async function buildLessonHtml(lesson: EmbeddedLesson): Promise<string> {
   const safeJs = js.replace(/<\/script/gi, "<\\/script").replace(/<!--/g, "<\\!--");
   const safeCss = css.replace(/<\/style/gi, "<\\/style");
   const data = JSON.stringify(lesson).replace(/</g, "\\u003c");
-  const title = escapeHtml(lesson.name.replace(/\.(xcanvas|xnote)$/i, ""));
+  const title = escapeHtml(meta?.title ?? lesson.name.replace(/\.(xcanvas|xnote)$/i, ""));
+  const metaTags = meta
+    ? `<meta name="description" content="${escapeHtml(`${meta.steps} steps`)}" />
+<meta property="og:title" content="${title}" />
+<script id="${META_ID}" type="application/json">${JSON.stringify(meta).replace(/</g, "\\u003c")}</script>
+`
+    : "";
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
 <title>${title}</title>
-<style>${safeCss}</style>
+${metaTags}<style>${safeCss}</style>
 </head>
 <body>
 <div id="root"></div>
@@ -72,10 +90,14 @@ export async function buildLessonHtml(lesson: EmbeddedLesson): Promise<string> {
 }
 
 export function downloadText(name: string, text: string, type: string) {
-  const url = URL.createObjectURL(new Blob([text], { type }));
+  downloadBlob(name, new Blob([text], { type }));
+}
+
+export function downloadBlob(name: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }

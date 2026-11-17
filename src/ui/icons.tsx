@@ -41,6 +41,9 @@ const PATHS = {
     circle(12, 12, 3),
   ],
   upload: ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M17 8l-5-5-5 5", "M12 3v12"],
+  record: [circle(12, 12, 7)],
+  pause: ["M9 5v14", "M15 5v14"],
+  stop: [rect(6, 6, 12, 12)],
 } as const;
 
 export type IconName = keyof typeof PATHS;

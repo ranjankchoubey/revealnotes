@@ -9,6 +9,7 @@ import {
 import { openFiles, revealNameFor, saveReveal, type SaveHandle } from "./lesson/storage";
 import { buildLessonHtml, downloadText, toBase64, withoutPdf } from "./lesson/export";
 import type { PaperMode } from "./render/draw";
+import { makeThumbnail } from "./render/thumb";
 import { Editor, type SaveState } from "./ui/Editor";
 import { Presenter } from "./ui/Presenter";
 import { getSettings, presenterSettings } from "./ui/settings";
@@ -168,14 +169,26 @@ export function App() {
     if (!loaded || !lesson) return;
     try {
       const doc = loaded.doc;
-      const html = await buildLessonHtml({
-        name: doc.fileName,
-        xcanvas: toBase64(doc.pdfBytes ? withoutPdf(loaded.bytes) : loaded.bytes),
-        reveal: serializeReveal(doc, loaded.ids, lesson, false),
-        pdf: doc.pdf && doc.pdfBytes ? await pdfPictures(doc) : undefined,
-        presenter: getSettings().embedPresenter ? presenterSettings() : undefined,
-      });
-      const name = doc.fileName.replace(/\.(xcanvas|xnote)$/i, "") + ".html";
+      const stages = usedStages(lesson.stages);
+      const title = doc.fileName.replace(/\.(xcanvas|xnote)$/i, "");
+      const html = await buildLessonHtml(
+        {
+          name: doc.fileName,
+          xcanvas: toBase64(doc.pdfBytes ? withoutPdf(loaded.bytes) : loaded.bytes),
+          reveal: serializeReveal(doc, loaded.ids, lesson, false),
+          pdf: doc.pdf && doc.pdfBytes ? await pdfPictures(doc) : undefined,
+          presenter: getSettings().embedPresenter ? presenterSettings() : undefined,
+        },
+        {
+          title,
+          steps: stages.length,
+          stepNames: stages.map((s) => lesson.names.get(s) ?? ""),
+          pages: doc.pages?.length ?? null,
+          exported: new Date().toISOString(),
+          thumb: await makeThumbnail(doc, lesson.paper),
+        },
+      );
+      const name = title + ".html";
       downloadText(name, html, "text/html");
       setNotice(`Downloaded ${name} — open it in any browser to present, even offline.`);
     } catch (e) {
@@ -239,6 +252,7 @@ export function App() {
         animation={lesson.animation}
         onAnimation={(animation) => update({ animation }, false)}
         onExit={exitPresent}
+        recordName={loaded.doc.fileName.replace(/\.(xcanvas|xnote)$/i, "")}
       />
     );
   }
