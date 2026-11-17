@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isNoteFile, loadDocument, type CanvasDoc } from "./format/xcanvas";
+import { attachPdf, pdfPictures } from "./format/pdf";
 import { objectIds } from "./lesson/ids";
 import {
-  applyReveal, loadDraft, newLesson, parseReveal, preferredPaper, rememberPaper, saveDraft, serializeReveal, usedStages,
+  applyReveal, loadDraft, newLesson, pairingDoubt, parseReveal, preferredPaper, rememberPaper, saveDraft, serializeReveal, usedStages,
   type Lesson, type MatchReport, type Steps,
 } from "./lesson/reveal";
 import { openFiles, revealNameFor, saveReveal, type SaveHandle } from "./lesson/storage";
-import { buildLessonHtml, downloadText, toBase64 } from "./lesson/export";
+import { buildLessonHtml, downloadText, toBase64, withoutPdf } from "./lesson/export";
 import type { PaperMode } from "./render/draw";
 import { Editor, type SaveState } from "./ui/Editor";
 import { Presenter } from "./ui/Presenter";
+import { getSettings, presenterSettings } from "./ui/settings";
 
 interface Loaded {
   doc: CanvasDoc;
@@ -32,6 +34,17 @@ type LaunchWindow = Window & {
   launchQueue?: { setConsumer(cb: (p: { files: { getFile(): Promise<File> }[] }) => void): void };
 };
 
+type Applied = ReturnType<typeof applyReveal>;
+
+/** A steps file that looks made for other notes, waiting for the user to say whether to use it. */
+interface Doubt {
+  applied: Applied;
+  stepsName: string;
+  madeFor: string;
+  kept: number;
+  total: number;
+}
+
 export function App() {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [lesson, setLesson] = useState<Lesson | null>(null);
@@ -43,6 +56,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<{ text: string; document: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [doubt, setDoubt] = useState<Doubt | null>(null);
   // Objects added or changed in the notes since the steps were saved; outlined until assigned.
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const fileInput = useRef<HTMLInputElement>(null);
@@ -61,18 +75,36 @@ export function App() {
       }
       const revealText = src.revealText ?? pending?.text ?? null;
       const doc = await loadDocument(src.fileName, src.bytes);
+      if (doc.pdfBytes) {
+        try {
+          await attachPdf(doc);
+        } catch {
+          doc.warnings.push("The PDF pages could not be shown; your ink is drawn on plain paper.");
+        }
+      }
       const ids = objectIds(doc);
       let l = newLesson(ids);
       let msg: string | null = null;
       let newIds: string[] = [];
-      const file = revealText ? parseReveal(revealText) : loadDraft(doc.manifestSha256, doc.fileName);
+      let doubtful: Doubt | null = null;
+      let file = revealText ? parseReveal(revealText) : null;
+      if (file) {
+        const res = applyReveal(doc, ids, file);
+        const d = pairingDoubt(res.report, ids.length);
+        if (d) {
+          doubtful = { applied: res, stepsName: src.revealName ?? revealNameFor(file.document), madeFor: file.document, ...d };
+          file = null;
+        }
+      }
+      file ??= loadDraft(doc.manifestSha256, doc.fileName);
       if (file) {
         const res = applyReveal(doc, ids, file);
         l = res.lesson;
         if (res.report.docChanged) newIds = res.report.addedIds;
-        msg = changeNotice(res.report) ?? (revealText || !usedStages(l.stages).length ? null : "Restored your steps from last time.");
+        msg = changeNotice(res.report) ?? (revealText && !doubtful ? null : usedStages(l.stages).length ? "Restored your steps from last time." : null);
       }
       setPending(null);
+      setDoubt(doubtful);
       setFresh(new Set(newIds));
       setLoaded({ doc, ids, bytes: src.bytes });
       edited.current = false;
@@ -135,12 +167,15 @@ export function App() {
   const exportHtml = useCallback(async () => {
     if (!loaded || !lesson) return;
     try {
+      const doc = loaded.doc;
       const html = await buildLessonHtml({
-        name: loaded.doc.fileName,
-        xcanvas: toBase64(loaded.bytes),
-        reveal: serializeReveal(loaded.doc, loaded.ids, lesson, false),
+        name: doc.fileName,
+        xcanvas: toBase64(doc.pdfBytes ? withoutPdf(loaded.bytes) : loaded.bytes),
+        reveal: serializeReveal(doc, loaded.ids, lesson, false),
+        pdf: doc.pdf && doc.pdfBytes ? await pdfPictures(doc) : undefined,
+        presenter: getSettings().embedPresenter ? presenterSettings() : undefined,
       });
-      const name = loaded.doc.fileName.replace(/\.(xcanvas|xnote)$/i, "") + ".html";
+      const name = doc.fileName.replace(/\.(xcanvas|xnote)$/i, "") + ".html";
       downloadText(name, html, "text/html");
       setNotice(`Downloaded ${name} — open it in any browser to present, even offline.`);
     } catch (e) {
@@ -148,16 +183,24 @@ export function App() {
     }
   }, [loaded, lesson]);
 
+  const adoptSteps = (res: Applied, from: string) => {
+    if (!lesson) return;
+    edited.current = true;
+    setFresh(new Set(res.report.docChanged ? res.report.addedIds : []));
+    setHistory((h) => [...h, { stages: lesson.stages, names: lesson.names }]);
+    setLesson(res.lesson);
+    setSaveState("unsaved");
+    setNotice(changeNotice(res.report) ?? `Loaded ${usedStages(res.lesson.stages).length} steps from ${from}.`);
+  };
+
   const loadSteps = async (f: File) => {
     if (!loaded || !lesson) return;
     try {
-      const res = applyReveal(loaded.doc, loaded.ids, parseReveal(await f.text()));
-      edited.current = true;
-      setFresh(new Set(res.report.docChanged ? res.report.addedIds : []));
-      setHistory((h) => [...h, { stages: lesson.stages, names: lesson.names }]);
-      setLesson(res.lesson);
-      setSaveState("unsaved");
-      setNotice(changeNotice(res.report) ?? `Loaded ${usedStages(res.lesson.stages).length} steps from ${f.name}.`);
+      const file = parseReveal(await f.text());
+      const res = applyReveal(loaded.doc, loaded.ids, file);
+      const d = pairingDoubt(res.report, loaded.ids.length);
+      if (d) setDoubt({ applied: res, stepsName: f.name, madeFor: file.document, ...d });
+      else adoptSteps(res, f.name);
     } catch (e) {
       setNotice(`Could not load steps: ${e instanceof Error ? e.message : e}`);
     }
@@ -201,8 +244,35 @@ export function App() {
   }
 
   if (loaded && lesson) {
+    const sameName = doubt?.madeFor === loaded.doc.fileName;
     return (
       <>
+        {doubt && (
+          <div className="modal-back" role="dialog" aria-modal="true" aria-labelledby="doubt-title">
+            <div className="modal">
+              <h2 id="doubt-title">These steps may be for different notes</h2>
+              <p>
+                <b>{doubt.stepsName}</b> was saved for {sameName ? "a different version of " : ""}<b>{doubt.madeFor}</b>.
+                Only {doubt.kept} of its {doubt.total} strokes match <b>{loaded.doc.fileName}</b>.
+              </p>
+              <p className="muted small">
+                Picked the wrong file? Choose <i>Don’t use</i>, then load the right one with <i>Load steps file</i> in Settings.
+              </p>
+              <div className="actions">
+                <button className="ghost" onClick={() => setDoubt(null)} autoFocus>Don’t use</button>
+                <button
+                  className="primary"
+                  onClick={() => {
+                    adoptSteps(doubt.applied, doubt.stepsName);
+                    setDoubt(null);
+                  }}
+                >
+                  Use anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <Editor
           doc={loaded.doc}
           ids={loaded.ids}

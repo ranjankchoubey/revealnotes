@@ -1,4 +1,5 @@
 import type { Bounds, CanvasDoc, CanvasItem } from "../format/xcanvas";
+import { labelCorners, shapePolylines } from "../shapes/item";
 
 function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): [number, number] {
   const dx = x2 - x1, dy = y2 - y1;
@@ -14,6 +15,7 @@ const inBounds = (b: Bounds, x: number, y: number, pad: number) =>
 /** True when (x, y) lies on the item's drawn geometry, within [tol] content px. */
 export function hitItem(it: CanvasItem, x: number, y: number, tol: number): boolean {
   if (!inBounds(it.bounds, x, y, tol)) return false;
+  if (it.kind === "tape") return it.body.some((poly) => pointInPolygon(poly.map((p): Pt => [p.x, p.y]), x, y));
   if (it.kind !== "stroke") return true;
   const c = it.ribbon.centers;
   const h = it.ribbon.halfWidths;
@@ -51,13 +53,15 @@ function drawnOf(it: CanvasItem): { lines: { pts: Pt[]; closed: boolean }[]; rea
     return { lines: [{ pts, closed: false }], reach };
   }
   if (it.kind === "shape") {
-    if (it.ellipse) {
-      const e = it.ellipse;
-      const cx = (e.minX + e.maxX) / 2, cy = (e.minY + e.maxY) / 2, rx = (e.maxX - e.minX) / 2, ry = (e.maxY - e.minY) / 2;
-      const pts: Pt[] = Array.from({ length: 32 }, (_, k) => [cx + rx * Math.cos((k / 32) * 2 * Math.PI), cy + ry * Math.sin((k / 32) * 2 * Math.PI)]);
-      return { lines: [{ pts, closed: true }], reach: it.width / 2 };
-    }
-    return { lines: [{ pts: it.points ?? [], closed: it.closed }], reach: it.width / 2 };
+    const lines = shapePolylines(it.paths).map((l) => ({ pts: l.pts.map((p): Pt => [p.x, p.y]), closed: l.closed }));
+    if (it.label) lines.push({ pts: labelCorners(it.label).map((p): Pt => [p.x, p.y]), closed: true });
+    return { lines, reach: it.width / 2 };
+  }
+  if (it.kind === "tape") {
+    return { lines: it.body.map((poly) => ({ pts: poly.map((p): Pt => [p.x, p.y]), closed: true })), reach: 0 };
+  }
+  if (it.kind === "image") {
+    return { lines: [{ pts: it.corners.map((p): Pt => [p.x, p.y]), closed: true }], reach: 0 };
   }
   const b = it.bounds;
   return { lines: [{ pts: [[b.minX, b.minY], [b.maxX, b.minY], [b.maxX, b.maxY], [b.minX, b.maxY]], closed: true }], reach: 0 };

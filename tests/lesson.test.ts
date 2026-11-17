@@ -57,9 +57,12 @@ describe("xnote (real file from XNotes)", () => {
     const shapes = doc.items.filter((i) => i.kind === "shape");
     expect(shapes.length).toBe(2);
     const [rect, tri] = shapes as Extract<typeof shapes[number], { kind: "shape" }>[];
-    expect(rect.points!.length).toBe(4);
-    expect(tri.points!.length).toBe(3);
-    expect(tri.closed).toBe(true);
+    expect(rect.shapeKind).toBe("rectangle");
+    expect(rect.paths[0].contours[0].segs.length + 1).toBe(4);
+    // Saved as a "polygon" stand-in for older readers, with its real kind under "geom".
+    expect(tri.shapeKind).toBe("right_triangle");
+    expect(tri.paths[0].contours[0].segs.length + 1).toBe(3);
+    expect(tri.paths[0].contours[0].closed).toBe(true);
     expect(doc.warnings).toEqual([]);
   });
 });

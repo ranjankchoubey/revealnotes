@@ -1,12 +1,26 @@
+import { unzipSync, zipSync } from "fflate";
+import type { PresenterSettings } from "../ui/settings";
 import type { RevealFile } from "./reveal";
 
 export const EMBED_ID = "revealnotes-data";
 
 export interface EmbeddedLesson {
   name: string;
-  /** The original .xcanvas file, base64. */
+  /** The original notes file, base64 (an .xnote's source PDF left out: [pdf] has its pages). */
   xcanvas: string;
   reveal: RevealFile;
+  /** PDF backdrops as pictures, keyed "page:turn". */
+  pdf?: Record<string, string>;
+  /** The author's presenter settings, applied while this file is open. */
+  presenter?: PresenterSettings;
+}
+
+/** The notes file without its source PDF (the export carries the pages as pictures instead). */
+export function withoutPdf(bytes: Uint8Array): Uint8Array {
+  const entries = unzipSync(bytes);
+  if (!entries["assets/source.pdf"]) return bytes;
+  delete entries["assets/source.pdf"];
+  return zipSync(entries);
 }
 
 export function toBase64(bytes: Uint8Array): string {

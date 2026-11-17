@@ -16,6 +16,12 @@ const server = Bun.serve({
     "/": index,
     "/player.js": () => bundle("js"),
     "/player.css": () => bundle("css"),
+    // pdf.js, loaded at runtime only for notes with PDF pages.
+    "/pdfjs/:file": (req) => {
+      const file = req.params.file;
+      if (file !== "pdf.min.mjs" && file !== "pdf.worker.min.mjs") return new Response("", { status: 404 });
+      return new Response(Bun.file(`node_modules/pdfjs-dist/build/${file}`), { headers: { "Content-Type": "text/javascript" } });
+    },
   },
 });
 console.log(`RevealNotes dev server: ${server.url}`);

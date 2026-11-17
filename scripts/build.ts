@@ -29,6 +29,9 @@ if (!player.success) {
 }
 
 await cp("public", out, { recursive: true });
+// pdf.js, loaded at runtime only for notes with PDF pages (kept out of the app and player bundles).
+for (const f of ["pdf.min.mjs", "pdf.worker.min.mjs"]) await cp(`node_modules/pdfjs-dist/build/${f}`, `${out}/pdfjs/${f}`);
+await cp("node_modules/pdfjs-dist/LICENSE", `${out}/pdfjs/LICENSE`);
 
 const sw = await readFile(`${out}/sw.js`, "utf8");
 await writeFile(`${out}/sw.js`, sw.replace("__VERSION__", Date.now().toString(36)));

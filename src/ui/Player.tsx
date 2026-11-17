@@ -3,6 +3,8 @@ import { loadXCanvas, type CanvasDoc } from "../format/xcanvas";
 import { objectIds } from "../lesson/ids";
 import { applyReveal, type Lesson } from "../lesson/reveal";
 import { fromBase64, type EmbeddedLesson } from "../lesson/export";
+import { pictureBackdrop } from "../format/pdf";
+import { applyLessonSettings } from "./settings";
 import { Presenter } from "./Presenter";
 
 /** Presentation-only view used by an exported lesson file. */
@@ -13,6 +15,8 @@ export function Player({ data }: { data: EmbeddedLesson }) {
     (async () => {
       try {
         const doc = await loadXCanvas(data.name, fromBase64(data.xcanvas));
+        if (data.pdf) doc.pdf = pictureBackdrop(data.pdf);
+        applyLessonSettings(data.presenter);
         const ids = objectIds(doc);
         setState({ doc, ids, lesson: applyReveal(doc, ids, data.reveal).lesson });
       } catch (e) {

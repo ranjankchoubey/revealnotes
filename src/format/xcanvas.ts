@@ -1,6 +1,10 @@
 import { unzipSync } from "fflate";
 import { DEFAULT_SPEED_SMOOTHING, SPEED_HI, buildRibbon, speedWidths, type BuildParams, type RibbonGeometry } from "../engine/strokeEngine";
 import { cyrb53 } from "../lesson/ids";
+import { buildShape, labelCorners, shapePolylines, type LabelDraw } from "../shapes/item";
+import { tapeBody, tapeOutline, tapePattern, tapePrintColor, TAPE_DEFAULT_WIDTH, type TapeMode, type TapePattern } from "../shapes/tape";
+import type { Pt, ShapePath } from "../shapes/types";
+import { fontFor, ptToPx, wrap } from "./text";
 
 export type Rgba = [number, number, number, number];
 
@@ -37,15 +41,37 @@ export interface StrokeItem extends ItemBase {
   blend: GlobalCompositeOperation;
   dashed: { width: number; on: number; gap: number } | null;
   ribbon: RibbonGeometry;
-  /** Features drawn without their exact XNotes effect (neon glow, cuts). */
-  approx: string[];
+  /** Neon glow (Stroke.paintNeon): strength 0..1 and the two bloom radii; null for plain ink (never on the highlighter). */
+  neon: { strength: number; wide: number; tight: number } | null;
+  /** Room-cut edges [x, y, nx, ny]: ink past an edge (along its normal) is hidden. */
+  cuts: [number, number, number, number][];
 }
 
 export interface ImageItem extends ItemBase {
   kind: "image";
   asset: string;
+  /** The unturned frame [x, y, w, h]. */
   rect: [number, number, number, number];
-  approx: string[];
+  /** Radians about the frame centre. */
+  angle: number;
+  /** Quarter turns of the picture inside the frame, degrees (0/90/180/270). */
+  orientation: number;
+  flip: { x: boolean; y: boolean };
+  /** Crop: the shown part as fractions [x, y, w, h] of the picture, or null for all of it. */
+  part: [number, number, number, number] | null;
+  corners: Pt[];
+}
+
+export interface TapeItem extends ItemBase {
+  kind: "tape";
+  /** Convex body pieces; their union is the tape. */
+  body: Pt[][];
+  /** Printed pattern polygons. */
+  marks: Pt[][];
+  /** What shows once peeled: the dashed edge. */
+  outline: { pts: Pt[]; closed: boolean }[];
+  color: Rgba;
+  printColor: Rgba;
 }
 
 export interface OtherItem extends ItemBase {
@@ -53,17 +79,19 @@ export interface OtherItem extends ItemBase {
   rawKind: string;
 }
 
+/** Shapes, connectors, drawn text (glyphs) and colour fills: XNotes' role-tagged paths. */
 export interface ShapeItem extends ItemBase {
   kind: "shape";
-  /** Polygon/polyline vertices, or null for an ellipse filling [ellipse]. */
-  points: [number, number][] | null;
-  ellipse: Bounds | null;
-  closed: boolean;
-  arrow: boolean;
-  stroke: Rgba | null;
+  shapeKind: string;
+  /** Page space. */
+  paths: ShapePath[];
+  stroke: Rgba;
   width: number;
   fill: Rgba | null;
   dash: [number, number] | null;
+  /** Neon glow strength 0..1, or null. */
+  neon: number | null;
+  label: LabelDraw | null;
 }
 
 export interface TextItem extends ItemBase {
@@ -80,7 +108,7 @@ export interface TextItem extends ItemBase {
   lineHeight: number;
 }
 
-export type CanvasItem = StrokeItem | ImageItem | TextItem | ShapeItem | OtherItem;
+export type CanvasItem = StrokeItem | ImageItem | TextItem | ShapeItem | TapeItem | OtherItem;
 
 /** One page of an .xnote, placed in document coordinates. */
 export interface PageInfo {
@@ -90,6 +118,16 @@ export interface PageInfo {
   pattern: Background["pattern"];
   patternColor: Rgba;
   spacing: number;
+  /** Page of the note's PDF drawn as this page's backdrop (0-based), or null. */
+  pdfPage: number | null;
+  /** Quarter turns clockwise applied to the PDF page. */
+  pdfTurn: number;
+}
+
+/** Draws a note's PDF pages; set once the PDF is loaded (in the app) or from pictures (in an export). */
+export interface PdfBackdrop {
+  /** The page as a picture at least [pxWide] px wide, turned [turn] quarter turns, or null while it renders (call [onReady] then). */
+  page(index: number, turn: number, pxWide: number, onReady: () => void): CanvasImageSource | null;
 }
 
 export interface CanvasDoc {
@@ -104,6 +142,9 @@ export interface CanvasDoc {
   items: CanvasItem[];
   /** Asset name -> object URL (images only). */
   assets: Map<string, string>;
+  /** The note's source PDF bytes (an .xnote with PDF pages), for the app to render. */
+  pdfBytes: Uint8Array | null;
+  pdf: PdfBackdrop | null;
   bounds: Bounds;
   warnings: string[];
 }
@@ -188,16 +229,17 @@ function parseStroke(raw: Record<string, unknown>, index: number, dx = 0, dy = 0
   const ribbon = buildRibbon(params);
   const color = rgba(c.rgba) ?? LEGACY_INK;
   const highlighter = toolId === "highlighter";
-  const approx: string[] = [];
-  if (bool(c.neon, false) && !highlighter) approx.push("neon glow");
-  if (Array.isArray(raw.cuts) && raw.cuts.length > 0) approx.push("cuts");
+  const cuts: [number, number, number, number][] = Array.isArray(raw.cuts)
+    ? (raw.cuts as unknown[]).filter((c): c is number[] => Array.isArray(c) && c.length >= 4).map((c) => [num(c[0], 0) + dx, num(c[1], 0) + dy, num(c[2], 0), num(c[3], 0)])
+    : [];
 
-  const bounds = emptyBounds();
+  let bounds = emptyBounds();
   const dashedW = params.baseWidth;
   for (let i = 0; i < ribbon.halfWidths.length; i++) {
     const r = toolId === "dashed" ? Math.max(dashedW / 2, ribbon.halfWidths[i]) : ribbon.halfWidths[i];
     grow(bounds, ribbon.centers[2 * i], ribbon.centers[2 * i + 1], r);
   }
+  if (cuts.length && Number.isFinite(bounds.minX)) bounds = cutBounds(bounds, cuts);
   return {
     kind: "stroke",
     index,
@@ -209,8 +251,47 @@ function parseStroke(raw: Record<string, unknown>, index: number, dx = 0, dy = 0
     blend: highlighter ? (bool(c.highlighter_inverse, false) ? "screen" : "multiply") : "source-over",
     dashed: toolId === "dashed" ? { width: dashedW, on: num(c.dash_length, 10), gap: num(c.dash_gap, 8) } : null,
     ribbon,
-    approx,
+    neon: bool(c.neon, false) && !highlighter ? neonOf(num(c.neon_strength, 0.6), params.baseWidth) : null,
+    cuts,
   };
+}
+
+function neonOf(strength: number, baseWidth: number) {
+  const s = Math.min(1, Math.max(0, strength));
+  return { strength: s, wide: Math.max(baseWidth * (1.8 + 5.0 * s), 6.0), tight: Math.max(baseWidth * (0.7 + 1.8 * s), 2.5) };
+}
+
+/** [poly] cut down by each edge (XNotes CutEdges.clip): what lies past an edge's normal goes. */
+export function clipByCuts(poly: Pt[], cuts: [number, number, number, number][]): Pt[] {
+  let out = poly;
+  for (const [x, y, nx, ny] of cuts) {
+    if (!out.length) break;
+    const next: Pt[] = [];
+    const past = (p: Pt) => (p.x - x) * nx + (p.y - y) * ny;
+    for (let i = 0; i < out.length; i++) {
+      const a = out[i];
+      const b = out[(i + 1) % out.length];
+      const da = past(a);
+      const db = past(b);
+      if (da <= 0) next.push(a);
+      if ((da < 0 && db > 0) || (da > 0 && db < 0)) {
+        const t = da / (da - db);
+        next.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      }
+    }
+    out = next;
+  }
+  return out;
+}
+
+const boxPoly = (b: Bounds): Pt[] => [{ x: b.minX, y: b.minY }, { x: b.maxX, y: b.minY }, { x: b.maxX, y: b.maxY }, { x: b.minX, y: b.maxY }];
+
+function cutBounds(b: Bounds, cuts: [number, number, number, number][]): Bounds {
+  const poly = clipByCuts(boxPoly(b), cuts);
+  if (poly.length < 3) return b;
+  const out = emptyBounds();
+  for (const p of poly) grow(out, p.x, p.y);
+  return out;
 }
 
 function rawGeometryBounds(raw: Record<string, unknown>, dx: number, dy: number): Bounds {
@@ -242,48 +323,14 @@ function mimeFor(name: string): string {
   return "application/octet-stream";
 }
 
-// XNotes FontFace ids mapped to the closest web font stacks; text is approximate either way.
-const FONTS: Record<string, string> = {
-  mono: "ui-monospace, Menlo, Consolas, monospace",
-  sans: "system-ui, -apple-system, 'Segoe UI', sans-serif",
-  serif: "Georgia, 'Times New Roman', serif",
-};
-
-let measureCtx: OffscreenCanvasRenderingContext2D | null | undefined;
-function measure(text: string, font: string, size: number): number {
-  if (measureCtx === undefined) measureCtx = typeof OffscreenCanvas === "function" ? new OffscreenCanvas(1, 1).getContext("2d") : null;
-  if (!measureCtx) return text.length * size * 0.6;
-  measureCtx.font = `${size}px ${font}`;
-  return measureCtx.measureText(text).width;
-}
-
-function wrap(text: string, width: number, font: string, size: number): string[] {
-  const out: string[] = [];
-  for (const para of text.split("\n")) {
-    let line = "";
-    for (const word of para.split(/(\s+)/)) {
-      const tryLine = line + word;
-      if (line && measure(tryLine, font, size) > width) {
-        out.push(line.trimEnd());
-        line = word.trimStart();
-      } else {
-        line = tryLine;
-      }
-    }
-    out.push(line);
-  }
-  return out;
-}
-
 /** Text items exist only in .xnote. 13 pt default, at XNotes' fixed 150/72 px per point. */
 function parseText(raw: Record<string, unknown>, index: number, dx: number, dy: number): TextItem {
   const pos = Array.isArray(raw.pos) ? raw.pos : [];
   const x = num(pos[0], 0) + dx;
   const y = num(pos[1], 0) + dy;
   const width = num(raw.width, 300);
-  const fontSize = num(raw.point_size, 13) * (150 / 72);
-  const face = typeof raw.font_face === "string" && raw.font_face ? raw.font_face : "mono";
-  const font = FONTS[face] ?? FONTS.sans;
+  const fontSize = ptToPx(num(raw.point_size, 13));
+  const font = fontFor(raw.font_face);
   const text = typeof raw.text === "string" ? raw.text : "";
   const lines = wrap(text, width, font, fontSize);
   const lineHeight = fontSize * 1.25;
@@ -295,47 +342,81 @@ function parseText(raw: Record<string, unknown>, index: number, dx: number, dy: 
   };
 }
 
-const OPEN_SHAPES = new Set(["line", "arrow", "polyline", "curve"]);
-
-/**
- * Common XNotes shapes (rectangle, ellipse/circle, line, arrow, polygon, polyline, triangle...).
- * `points`, when present, is the already-transformed outline XNotes saves; otherwise start/end span the box.
- * Returns null for anything we can't draw faithfully, so it falls back to a placeholder.
- */
-function parseShape(raw: Record<string, unknown>, index: number, dx: number, dy: number, note: (w: string) => void): ShapeItem | null {
-  const kind = typeof raw.shape === "string" ? raw.shape : "";
-  const pt = (v: unknown): [number, number] | null =>
-    Array.isArray(v) && typeof v[0] === "number" && typeof v[1] === "number" ? [v[0] + dx, v[1] + dy] : null;
-  const start = pt(raw.start);
-  const end = pt(raw.end);
-  const pts = Array.isArray(raw.points) ? (raw.points as unknown[]).map(pt).filter((p): p is [number, number] => !!p) : [];
-  let points: [number, number][] | null = null;
-  let ellipse: Bounds | null = null;
-  if (pts.length >= 2) points = pts;
-  else if (start && end) {
-    const [x0, y0] = start;
-    const [x1, y1] = end;
-    const box = { minX: Math.min(x0, x1), minY: Math.min(y0, y1), maxX: Math.max(x0, x1), maxY: Math.max(y0, y1) };
-    if (kind === "rectangle" || kind === "square") points = [[box.minX, box.minY], [box.maxX, box.minY], [box.maxX, box.maxY], [box.minX, box.maxY]];
-    else if (kind === "ellipse" || kind === "circle") ellipse = box;
-    else if (kind === "line" || kind === "arrow") points = [start, end];
-  }
-  if (!points && !ellipse) return null;
-  if (!pts.length && num(raw.angle, 0) !== 0) note("rotated shape");
-  if (raw.label) note("shape label (not shown)");
-  if (kind === "arrow") note("arrow head");
-  const width = num(raw.stroke_width, 2);
+function boundsOf(points: Iterable<Pt>, pad = 0): Bounds {
   const b = emptyBounds();
-  for (const [x, y] of points ?? []) grow(b, x, y, width / 2);
-  if (ellipse) unionInto(b, { minX: ellipse.minX - width / 2, minY: ellipse.minY - width / 2, maxX: ellipse.maxX + width / 2, maxY: ellipse.maxY + width / 2 });
+  for (const p of points) grow(b, p.x, p.y, pad);
+  return b;
+}
+
+/** XNotes shapes, connectors, drawn text and fills (see shapes/item.ts). */
+function parseShape(raw: Record<string, unknown>, index: number, dx: number, dy: number): ShapeItem | null {
+  const d = buildShape(raw, dx, dy);
+  if (!d) return null;
+  const width = num(raw.stroke_width, 2);
+  const neon = raw.neon === true ? Math.min(1, Math.max(0, num(raw.neon_strength, 0.6))) : null;
+  const pts = shapePolylines(d.paths).flatMap((l) => l.pts);
+  if (d.label) pts.push(...labelCorners(d.label));
+  const b = boundsOf(pts, width / 2);
+  if (!Number.isFinite(b.minX)) return null;
   return {
-    kind: "shape", index, raw, bounds: b, points, ellipse,
-    closed: !OPEN_SHAPES.has(kind),
-    arrow: kind === "arrow",
-    stroke: rgba(raw.stroke_rgba),
+    kind: "shape", index, raw, bounds: b,
+    shapeKind: d.kindId,
+    paths: d.paths,
+    stroke: rgba(raw.stroke_rgba) ?? [0, 0, 0, 255],
     width,
     fill: rgba(raw.fill_rgba),
     dash: raw.dashed === true ? [num(raw.dash_length, 10), num(raw.dash_gap, 8)] : null,
+    neon,
+    label: d.label,
+  };
+}
+
+/** A picture in its frame, turned [angle] about the centre (XNotes ImageItem). */
+function parseImage(raw: Record<string, unknown>, index: number, dx: number, dy: number): ImageItem {
+  const r = (raw.rect as unknown[]).slice(0, 4).map((v) => num(v, 0));
+  const rect: [number, number, number, number] = [r[0] + dx, r[1] + dy, r[2], r[3]];
+  const angle = num(raw.angle, 0);
+  const cx = rect[0] + rect[2] / 2, cy = rect[1] + rect[3] / 2;
+  const cs = Math.cos(angle), sn = Math.sin(angle);
+  const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => {
+    const x = (sx * rect[2]) / 2, y = (sy * rect[3]) / 2;
+    return { x: cx + x * cs - y * sn, y: cy + x * sn + y * cs };
+  });
+  const p = Array.isArray(raw.part) && raw.part.length >= 4 ? (raw.part as unknown[]).map((v) => num(v, 0)) : null;
+  const part: ImageItem["part"] = p && p[2] > 0 && p[3] > 0 ? [p[0], p[1], p[2], p[3]] : null;
+  const f = typeof raw.flip === "string" ? raw.flip : "";
+  return {
+    kind: "image", index, raw, asset: raw.asset as string, rect, angle,
+    orientation: ((Math.round(num(raw.orientation, 0) / 90) * 90) % 360 + 360) % 360,
+    flip: { x: f.includes("x"), y: f.includes("y") },
+    part, corners,
+    bounds: boundsOf(corners),
+  };
+}
+
+const TAPE_MODES = new Set<TapeMode>(["straight", "rectangle", "freehand"]);
+const TAPE_PATTERNS = new Set<TapePattern>(["solid", "stripes", "dots", "grid"]);
+
+/** Masking tape: an opaque strip over the ink, peeled in the presenter to show what it hides. */
+function parseTape(raw: Record<string, unknown>, index: number, dx: number, dy: number): TapeItem | null {
+  const points = Array.isArray(raw.points)
+    ? (raw.points as unknown[]).filter((v): v is number[] => Array.isArray(v) && typeof v[0] === "number" && typeof v[1] === "number").map((v) => ({ x: v[0] + dx, y: v[1] + dy }))
+    : [];
+  if (!points.length) return null;
+  const mode = TAPE_MODES.has(raw.mode as TapeMode) ? (raw.mode as TapeMode) : "straight";
+  const pattern = TAPE_PATTERNS.has(raw.pattern as TapePattern) ? (raw.pattern as TapePattern) : "solid";
+  const shape = { mode, points, width: Math.max(1, num(raw.width, TAPE_DEFAULT_WIDTH)) };
+  const c = rgba(raw.rgba) ?? [255, 214, 102, 255];
+  const body = tapeBody(shape);
+  const print = tapePrintColor([c[0], c[1], c[2]]);
+  return {
+    kind: "tape", index, raw,
+    body,
+    marks: tapePattern(shape, pattern),
+    outline: tapeOutline(shape),
+    color: [c[0], c[1], c[2], 255],
+    printColor: [print[0], print[1], print[2], 255],
+    bounds: boundsOf(body.flat()),
   };
 }
 
@@ -351,30 +432,22 @@ function parseItems(rawItems: unknown, ctx: ParseCtx, dx: number, dy: number, pa
     if (!raw || typeof raw !== "object") continue;
     const index = ctx.items.length;
     const kind = typeof raw.kind === "string" ? raw.kind : "?";
-    const shape = kind === "shape" && !raw.connector ? parseShape(raw, index, dx, dy, ctx.note) : null;
     let item: CanvasItem | null = null;
     if (kind === "stroke") {
-      const s = parseStroke(raw, index, dx, dy);
-      s.approx.forEach(ctx.note);
-      item = s;
+      item = parseStroke(raw, index, dx, dy);
     } else if (kind === "text" && page !== undefined) {
-      ctx.note("text box (font and wrapping approximate)");
       item = parseText(raw, index, dx, dy);
-    } else if (shape) {
-      item = shape;
+    } else if (kind === "shape" || kind === "glyphs" || kind === "fill") {
+      item = parseShape(raw, index, dx, dy);
     } else if (kind === "image" && typeof raw.asset === "string" && ctx.assets.has(raw.asset) && Array.isArray(raw.rect)) {
-      const r = (raw.rect as unknown[]).slice(0, 4).map((v) => num(v, 0));
-      const approx: string[] = [];
-      if (num(raw.angle, 0) !== 0) approx.push("image rotation");
-      if (num(raw.orientation, 0) !== 0) approx.push("image orientation");
-      if (raw.flip && raw.flip !== "none") approx.push("image flip");
-      if (raw.part) approx.push("image crop");
-      approx.forEach(ctx.note);
-      item = { kind: "image", index, raw, asset: raw.asset, rect: [r[0] + dx, r[1] + dy, r[2], r[3]], bounds: rawGeometryBounds(raw, dx, dy), approx };
-    } else {
+      item = parseImage(raw, index, dx, dy);
+    } else if (kind === "tape") {
+      item = parseTape(raw, index, dx, dy);
+    }
+    if (!item) {
       const bounds = rawGeometryBounds(raw, dx, dy);
       if (Number.isFinite(bounds.minX)) {
-        ctx.note(`${kind} (drawn as placeholder box)`);
+        ctx.note(kind === "audio" ? "audio clip (shown as a box; audio does not play)" : `${kind} (drawn as placeholder box)`);
         item = { kind: "other", index, raw, rawKind: kind, bounds };
       } else {
         ctx.note(`${kind} (no geometry, skipped)`);
@@ -408,7 +481,6 @@ function layoutPages(manifest: Record<string, unknown>, ctx: ParseCtx, warnings:
   const maxW = Math.max(0, ...sizes.map((s) => s.w));
   const pages: PageInfo[] = [];
   let y = 0;
-  let pdfPages = 0;
   let templates = 0;
   rawPages.forEach((pg, i) => {
     const { w, h } = sizes[i];
@@ -416,19 +488,20 @@ function layoutPages(manifest: Record<string, unknown>, ctx: ParseCtx, warnings:
     const style = (pg?.style ?? {}) as Record<string, unknown>;
     const pick = (k: string) => style[k] ?? docStyle[k];
     const pattern = PATTERNS.includes(pick("pattern") as string) ? (pick("pattern") as Background["pattern"]) : "none";
-    if (pg?.pdf_page !== undefined && pg?.pdf_page !== null) pdfPages++;
     if (pick("template")) templates++;
+    const pdfPage = typeof pg?.pdf_page === "number" && pg.pdf_page >= 0 ? Math.floor(pg.pdf_page) : null;
     pages.push({
       bounds: { minX: x, minY: y, maxX: x + w, maxY: y + h },
       color: rgba(pick("page_color")),
       pattern,
       patternColor: rgba(pick("pattern_color")) ?? [150, 150, 150, 128],
       spacing: num(pick("spacing"), 64),
+      pdfPage,
+      pdfTurn: pdfPage === null ? 0 : ((Math.round(num(pg?.pdf_turn, 0)) % 4) + 4) % 4,
     });
     parseItems(pg?.items, ctx, x, y, i);
     y += h + PAGE_GAP;
   });
-  if (pdfPages) warnings.push(`${pdfPages} page(s) have a PDF background, which is not shown.`);
   if (templates) warnings.push(`${templates} page(s) use a custom template, shown as plain paper.`);
   return pages;
 }
@@ -487,6 +560,8 @@ export async function loadDocument(fileName: string, bytes: Uint8Array): Promise
     pages,
     items: ctx.items,
     assets,
+    pdfBytes: pages?.some((p) => p.pdfPage !== null) ? (entries["assets/source.pdf"] ?? null) : null,
+    pdf: null,
     bounds,
     warnings,
   };

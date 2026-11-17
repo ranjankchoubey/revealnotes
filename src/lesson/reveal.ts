@@ -102,6 +102,20 @@ export function newLesson(ids: string[]): Lesson {
   return { stages: new Map(ids.map((id) => [id, 0])), names: new Map(), base: null, paper: preferredPaper(), animation: DEFAULT_ANIMATION };
 }
 
+/**
+ * When a steps file probably belongs to other notes: the notes differ from the ones it was saved
+ * for and fewer than half the strokes match (of the file's, or of the notes', whichever is fewer).
+ * Null when the pairing looks right.
+ */
+export function pairingDoubt(r: MatchReport, docObjects: number): { kept: number; total: number } | null {
+  if (!r.docChanged) return null;
+  const kept = r.matched + r.recovered;
+  const fileObjects = kept + r.missing.length;
+  const total = Math.min(fileObjects, docObjects);
+  if (total === 0 || kept >= total * 0.5) return null;
+  return { kept, total: fileObjects };
+}
+
 /** Apply a reveal file to the document by object ID (never by index) and report differences. */
 export function applyReveal(doc: CanvasDoc, ids: string[], file: RevealFile): { lesson: Lesson; report: MatchReport } {
   const stages = new Map<string, number>();

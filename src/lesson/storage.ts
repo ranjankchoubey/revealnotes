@@ -21,6 +21,7 @@ export interface LessonSource {
   bytes: Uint8Array;
   /** Text of a reveal .json opened alongside the document, if any. */
   revealText: string | null;
+  revealName: string | null;
 }
 
 /** An .xcanvas and/or a reveal .json, from a picker, a drop, a share or an OS "open with". */
@@ -37,6 +38,7 @@ export async function openFiles(list: FileList | File[]): Promise<LessonSource> 
     fileName: xc?.name ?? "",
     bytes: xc ? new Uint8Array(await xc.arrayBuffer()) : new Uint8Array(),
     revealText: js ? await js.text() : null,
+    revealName: js?.name ?? null,
   };
 }
 

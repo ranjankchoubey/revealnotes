@@ -58,6 +58,16 @@ body { -webkit-touch-callout: none; touch-action: manipulation; }
 .settings .row.actions { justify-content: flex-start; flex-wrap: wrap; }
 .settings details { border-top: 1px solid var(--border); padding-top: 8px; }
 .settings summary { cursor: pointer; color: var(--muted); }
+
+/* Confirm dialog (a steps file that looks made for other notes) */
+.modal-back { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(0, 0, 0, 0.35); padding: 16px; }
+.modal {
+  width: min(440px, 100%); background: var(--raised); color: var(--text); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3); padding: 18px 20px 16px;
+}
+.modal h2 { margin: 0 0 8px; font-size: 18px; }
+.modal p { margin: 0 0 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .seg { display: inline-flex; background: var(--hover); border-radius: 10px; padding: 2px; }
 .seg button { padding: 6px 12px; border-radius: 8px; font-size: 13px; white-space: nowrap; min-height: 34px; }
 .seg button.on { background: var(--raised); color: var(--accent); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }

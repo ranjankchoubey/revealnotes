@@ -12,10 +12,17 @@ export interface Settings {
   selectTool: "lasso" | "box";
   /** Numbered markers on each group of marked strokes in the editor. */
   badges: boolean;
+  /** Exported lessons start with this device's presenter settings (camera follow, laser). */
+  embedPresenter: boolean;
 }
 
+/** The settings an exported lesson carries. */
+export type PresenterSettings = Pick<Settings, "cameraFollow" | "laserSeconds" | "laserColor">;
+
 const KEY = "revealnotes:settings";
-const DEFAULTS: Settings = { cameraFollow: true, laserSeconds: 2, laserColor: "#ff3b3b", stylus: "auto", selectTool: "lasso", badges: true };
+const DEFAULTS: Settings = {
+  cameraFollow: true, laserSeconds: 2, laserColor: "#ff3b3b", stylus: "auto", selectTool: "lasso", badges: true, embedPresenter: true,
+};
 export const LASER_COLORS = ["#ff3b3b", "#2ee66b", "#2e9bff", "#ffd400"];
 
 function load(): Settings {
@@ -36,6 +43,23 @@ export function setSettings(patch: Partial<Settings>) {
   } catch {
     // Preferences only.
   }
+  for (const l of listeners) l(current);
+}
+
+export const getSettings = () => current;
+
+export function presenterSettings(s: Settings = current): PresenterSettings {
+  return { cameraFollow: s.cameraFollow, laserSeconds: s.laserSeconds, laserColor: s.laserColor };
+}
+
+/** An exported lesson's settings, for this viewing only: the viewer's own saved preferences stay as they are. */
+export function applyLessonSettings(p: Partial<PresenterSettings> | undefined) {
+  if (!p) return;
+  const ok: Partial<Settings> = {};
+  if (typeof p.cameraFollow === "boolean") ok.cameraFollow = p.cameraFollow;
+  if (typeof p.laserSeconds === "number" && p.laserSeconds > 0 && p.laserSeconds <= 60) ok.laserSeconds = p.laserSeconds;
+  if (typeof p.laserColor === "string" && /^#[0-9a-f]{6}$/i.test(p.laserColor)) ok.laserColor = p.laserColor;
+  current = { ...current, ...ok };
   for (const l of listeners) l(current);
 }
 

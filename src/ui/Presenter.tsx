@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Bounds, CanvasDoc, CanvasItem } from "../format/xcanvas";
+import type { Bounds, CanvasDoc, CanvasItem, TapeItem } from "../format/xcanvas";
 import { fitView, strokeArc, type PaperMode, type View } from "../render/draw";
+import { hitItem } from "../render/hit";
 import { usedStages, type Animation, type Steps } from "../lesson/reveal";
 import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
 import { IconButton } from "./icons";
@@ -79,6 +80,8 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const limit = pos === 0 ? 0 : steps[pos - 1];
   const settings = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Tapes peeled back this session (never saved, as in XNotes).
+  const [peeled, setPeeled] = useState<Set<TapeItem>>(() => new Set());
   // Laser: a stylus always draws it; laserOn lets a finger or mouse draw it too.
   const [laserOn, setLaserOn] = useState(false);
   const lasers = useRef<LaserStroke[]>([]);
@@ -394,6 +397,17 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           const d = downAt.current;
           downAt.current = null;
           if (!d || Math.hypot(c.event.clientX - d.x, c.event.clientY - d.y) > 8) return;
+          // Tapping a shown tape peels it back (or sticks it down again), as in XNotes.
+          for (let i = doc.items.length - 1; i >= 0; i--) {
+            const it = doc.items[i];
+            if (it.kind !== "tape" || stageOf(it) > limit || !hitItem(it, c.x, c.y, 0)) continue;
+            setPeeled((s) => {
+              const n = new Set(s);
+              if (!n.delete(it)) n.add(it);
+              return n;
+            });
+            return;
+          }
           // Tap the left quarter to go back, anywhere else to go forward.
           const r = c.event.currentTarget.getBoundingClientRect();
           if (c.event.clientX - r.left < r.width / 4) prev();
@@ -403,6 +417,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         options={{
           paper,
           visible: (it) => stageOf(it) <= limit,
+          peeled: (it) => peeled.has(it),
           reveal: (it) => {
             const r = revealing.current;
             const s = r?.sched.get(it);

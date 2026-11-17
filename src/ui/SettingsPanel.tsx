@@ -128,6 +128,14 @@ export function SettingsPanel(p: Props) {
           {p.onExport && <IconButton icon="export" label="Export HTML" onClick={p.onExport} />}
         </div>
       )}
+      {p.onExport && (
+        <div className="row">
+          <span title="The exported file starts with your camera-follow and laser settings; viewers can still change them">
+            Export with these presenter settings
+          </span>
+          <Seg value={s.embedPresenter ? "on" : "off"} options={[["on", "On"], ["off", "Off"]]} onChange={(v) => set({ embedPresenter: v === "on" })} />
+        </div>
+      )}
 
       <details>
         <summary>Shortcuts</summary>
