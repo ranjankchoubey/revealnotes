@@ -597,6 +597,8 @@ export interface RenderOptions {
   lasso?: [number, number][] | null;
   /** Items to call out (e.g. new since the steps were saved): dashed frame. */
   flagged?: (it: CanvasItem) => boolean;
+  /** A selection being previewed: these glow in [accent], everything else is dimmed. */
+  selected?: (it: CanvasItem) => boolean;
   accent?: Rgba;
   /** Drawn last, in content coordinates (the presenter's laser). */
   overlay?: (ctx: CanvasRenderingContext2D, view: View) => void;
@@ -655,7 +657,20 @@ export function render(ctx: CanvasRenderingContext2D, o: RenderOptions) {
     glow(ctx, o.hover, 2.5 / view.zoom);
     ctx.restore();
   }
-  for (const it of o.doc.items) if (onScreen(it)) drawRevealing(ctx, env, it, o.reveal?.(it));
+  if (o.selected) {
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = ctx.fillStyle = css(o.accent ?? [255, 170, 0, 255], 0.85);
+    for (const it of o.doc.items) if (onScreen(it) && o.selected(it)) glow(ctx, it, 4 / view.zoom);
+    ctx.restore();
+  }
+  for (const it of o.doc.items) {
+    if (!onScreen(it)) continue;
+    const dim = o.selected && !o.selected(it);
+    if (dim) ctx.globalAlpha = 0.25;
+    drawRevealing(ctx, env, it, o.reveal?.(it));
+    if (dim) ctx.globalAlpha = 1;
+  }
   if (o.flagged) {
     const pad = 6 / view.zoom;
     ctx.save();

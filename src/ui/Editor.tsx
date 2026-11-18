@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Bounds, CanvasDoc, CanvasItem, Rgba } from "../format/xcanvas";
 import { fitView, type PaperMode, type View } from "../render/draw";
-import { boxRing, pickAt, ringMembers } from "../render/hit";
+import { boxRing, pickAt, ringInside, ringMembers } from "../render/hit";
 import { compactStages, usedStages, type Animation, type Steps } from "../lesson/reveal";
 import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
 import { Icon, IconButton } from "./icons";
@@ -66,6 +66,13 @@ export function Editor(p: Props) {
   const settings = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lasso, setLasso] = useState<[number, number][] | null>(null);
+  // A box/lasso selection waiting to be added to the active step; taps add or remove strokes.
+  const [pending, setPending] = useState<{ ring: [number, number][]; items: Set<CanvasItem> } | null>(null);
+  useEffect(() => setPending(null), [doc]);
+  const members = useCallback(
+    (ring: [number, number][], mode: "touch" | "inside") => new Set(mode === "inside" ? ringInside(doc.items, ring) : ringMembers(doc.items, ring)),
+    [doc],
+  );
   // Once a stylus is used (auto mode), the pen selects and a finger pans, like XNotes.
   const [penSeen, setPenSeen] = useState(false);
   const fingerPans = settings.stylus === "always" || (settings.stylus === "auto" && penSeen);
@@ -204,6 +211,15 @@ export function Editor(p: Props) {
     p.onSeen(items.map((it) => idOf.get(it)!));
   };
 
+  const confirmPending = () => {
+    if (pending) apply([...pending.items], false);
+    setPending(null);
+  };
+  const setSelectMode = (mode: "touch" | "inside") => {
+    setSettings({ selectMode: mode });
+    setPending((s) => s && { ring: s.ring, items: members(s.ring, mode) });
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) {
@@ -215,6 +231,8 @@ export function Editor(p: Props) {
       if (mod && k === "s") { e.preventDefault(); p.onSave(); }
       else if (mod && k === "z") { e.preventDefault(); p.onUndo(); }
       else if (mod) return;
+      else if (pending && e.key === "Enter") { e.preventDefault(); confirmPending(); }
+      else if (pending && k === "escape") setPending(null);
       else if (/^[0-9]$/.test(e.key)) { const s = Number(e.key); if (s === 0 || steps.includes(s)) choose(s); }
       else if (e.key === "ArrowRight") step(1);
       else if (e.key === "ArrowLeft") step(-1);
@@ -228,7 +246,7 @@ export function Editor(p: Props) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [p, steps, choose, newStep, fit, step, fitMode]);
+  }, [p, steps, choose, newStep, fit, step, fitMode, pending, confirmPending]);
 
   const rect = (a: { x: number; y: number }, b: { x: number; y: number }): Bounds => ({
     minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y),
@@ -393,7 +411,11 @@ export function Editor(p: Props) {
             if (!d) return;
             if (d.moved) {
               const ring = settings.selectTool === "box" ? boxRing(rect(d, c)) : [...d.ring, [c.x, c.y] as [number, number]];
-              apply(ringMembers(doc.items, ring), false);
+              if (ring.length >= 3) setPending({ ring, items: members(ring, settings.selectMode) });
+            } else if (d.hit && pending) {
+              const items = new Set(pending.items);
+              if (!items.delete(d.hit)) items.add(d.hit);
+              setPending({ ring: pending.ring, items });
             } else if (d.hit) apply([d.hit], true);
           }}
           onCancel={() => {
@@ -413,7 +435,8 @@ export function Editor(p: Props) {
             },
             hover,
             marquee: box,
-            lasso,
+            lasso: lasso ?? pending?.ring ?? null,
+            selected: pending ? (it) => pending.items.has(it) : undefined,
             flagged: p.fresh.size ? (it) => p.fresh.has(idOf.get(it)!) : undefined,
             accent: stepColor(active),
             badges,
@@ -425,7 +448,25 @@ export function Editor(p: Props) {
             {doc.warnings.map((w) => <div key={w} className="muted">{w}</div>)}
           </div>
         )}
-        {!assignedAny && (
+        {pending && (
+          <div className="selbar" onPointerDown={(e) => e.stopPropagation()}>
+            <span className="seg">
+              <button className={settings.selectMode === "touch" ? "on" : ""} onClick={() => setSelectMode("touch")} title="Strokes the boundary touches or surrounds">
+                Touching
+              </button>
+              <button className={settings.selectMode === "inside" ? "on" : ""} onClick={() => setSelectMode("inside")} title="Only strokes wholly inside the boundary">
+                Inside
+              </button>
+            </span>
+            <span className="count">{pending.items.size} selected</span>
+            <span className="muted tip-text">tap strokes to add or remove</span>
+            <button onClick={() => setPending(null)} title="Cancel (Esc)">Cancel</button>
+            <button className="primary" onClick={confirmPending} disabled={pending.items.size === 0} title="Add to the step (Enter)">
+              Add to {active > 0 ? names.get(active) || `Step ${active}` : "Always"}
+            </button>
+          </div>
+        )}
+        {!assignedAny && !pending && (
           <div className="hint">
             Pick a step, then tap strokes or draw a loop around them.{" "}
             <button className="link" onClick={p.onLoadSteps}>Have a .reveal.json? Load it</button>

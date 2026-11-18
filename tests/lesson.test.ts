@@ -4,7 +4,7 @@ import { strToU8, unzipSync, zipSync } from "fflate";
 import { loadDocument, loadXCanvas } from "../src/format/xcanvas";
 import { objectIds } from "../src/lesson/ids";
 import { applyReveal, compactStages, newLesson, serializeReveal } from "../src/lesson/reveal";
-import { ringMembers } from "../src/render/hit";
+import { ringInside, ringMembers } from "../src/render/hit";
 import { revealNameFor } from "../src/lesson/storage";
 
 describe("compactStages", () => {
@@ -102,6 +102,16 @@ describe("selection and files", () => {
     expect(ringMembers(doc.items, around)).toContain(doc.items[0]);
     const far: [number, number][] = [[0, 0], [10, 0], [10, 10], [0, 10]];
     expect(ringMembers(doc.items, far)).toEqual([]);
+  });
+  test("fully-inside selection skips strokes the boundary only grazes", async () => {
+    const doc = await loadXCanvas("untitled_1.xcanvas", new Uint8Array(readFileSync(SAMPLE)));
+    const b = doc.items[0].bounds;
+    const around: [number, number][] = [[b.minX - 5, b.minY - 5], [b.maxX + 5, b.minY - 5], [b.maxX + 5, b.maxY + 5], [b.minX - 5, b.maxY + 5]];
+    expect(ringInside(doc.items, around)).toContain(doc.items[0]);
+    const midY = (b.minY + b.maxY) / 2;
+    const half: [number, number][] = [[b.minX - 5, b.minY - 5], [b.maxX + 5, b.minY - 5], [b.maxX + 5, midY], [b.minX - 5, midY]];
+    expect(ringMembers(doc.items, half)).toContain(doc.items[0]);
+    expect(ringInside(doc.items, half)).not.toContain(doc.items[0]);
   });
   test("steps file is named after the full notes file name", () => {
     expect(revealNameFor("lecture 3.xnote")).toBe("lecture 3.xnote.reveal.json");

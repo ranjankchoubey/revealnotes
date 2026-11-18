@@ -10,6 +10,8 @@ export interface Settings {
   /** "auto": once a stylus is used, the pen selects and fingers pan. */
   stylus: "auto" | "always" | "never";
   selectTool: "lasso" | "box";
+  /** "touch": the boundary takes what it touches or surrounds; "inside": only what lies wholly within. */
+  selectMode: "touch" | "inside";
   /** Numbered markers on each group of marked strokes in the editor. */
   badges: boolean;
   /** Exported lessons start with this device's presenter settings (camera follow, laser). */
@@ -21,7 +23,7 @@ export type PresenterSettings = Pick<Settings, "cameraFollow" | "laserSeconds" |
 
 const KEY = "revealnotes:settings";
 const DEFAULTS: Settings = {
-  cameraFollow: true, laserSeconds: 2, laserColor: "#ff3b3b", stylus: "auto", selectTool: "lasso", badges: true, embedPresenter: true,
+  cameraFollow: true, laserSeconds: 2, laserColor: "#ff3b3b", stylus: "auto", selectTool: "lasso", selectMode: "touch", badges: true, embedPresenter: true,
 };
 export const LASER_COLORS = ["#ff3b3b", "#2ee66b", "#2e9bff", "#ffd400"];
 

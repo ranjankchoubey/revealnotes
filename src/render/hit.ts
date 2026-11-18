@@ -99,11 +99,7 @@ function segSegDist(a: Pt, b: Pt, c: Pt, d: Pt): number {
  */
 export function ringMembers(items: CanvasItem[], ring: Pt[]): CanvasItem[] {
   if (ring.length < 3) return [];
-  const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
-  for (const [x, y] of ring) {
-    box.minX = Math.min(box.minX, x); box.minY = Math.min(box.minY, y);
-    box.maxX = Math.max(box.maxX, x); box.maxY = Math.max(box.maxY, y);
-  }
+  const box = ringBox(ring);
   const n = ring.length;
   return items.filter((it) => {
     const b = it.bounds;
@@ -132,6 +128,26 @@ export function ringMembers(items: CanvasItem[], ring: Pt[]): CanvasItem[] {
       }
     }
     return false;
+  });
+}
+
+function ringBox(ring: Pt[]): Bounds {
+  const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  for (const [x, y] of ring) {
+    box.minX = Math.min(box.minX, x); box.minY = Math.min(box.minY, y);
+    box.maxX = Math.max(box.maxX, x); box.maxY = Math.max(box.maxY, y);
+  }
+  return box;
+}
+
+/** Items drawn entirely inside the closed ring, so dense neighbours it merely grazes stay out. */
+export function ringInside(items: CanvasItem[], ring: Pt[]): CanvasItem[] {
+  if (ring.length < 3) return [];
+  const box = ringBox(ring);
+  return items.filter((it) => {
+    const b = it.bounds;
+    if (b.minX < box.minX || b.maxX > box.maxX || b.minY < box.minY || b.maxY > box.maxY) return false;
+    return drawnOf(it).lines.every((l) => l.pts.every(([x, y]) => pointInPolygon(ring, x, y)));
   });
 }
 
