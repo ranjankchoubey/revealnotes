@@ -7,6 +7,8 @@ export interface ContentPointer {
   y: number;
   /** Content px per CSS px (for hit tolerances). */
   scale: number;
+  /** Every position the device reported since the last event (fast stylus strokes), this one last. */
+  samples: [number, number][];
   event: React.PointerEvent<HTMLCanvasElement>;
 }
 
@@ -141,7 +143,11 @@ export function CanvasView(p: Props) {
   const toContent = (e: React.PointerEvent<HTMLCanvasElement>): ContentPointer => {
     const v = p.view!;
     const r = e.currentTarget.getBoundingClientRect();
-    return { x: v.scrollX + (e.clientX - r.left) / v.zoom, y: v.scrollY + (e.clientY - r.top) / v.zoom, scale: 1 / v.zoom, event: e };
+    const at = (cx: number, cy: number): [number, number] => [v.scrollX + (cx - r.left) / v.zoom, v.scrollY + (cy - r.top) / v.zoom];
+    const [x, y] = at(e.clientX, e.clientY);
+    const coalesced = e.type === "pointermove" ? e.nativeEvent.getCoalescedEvents?.() ?? [] : [];
+    const samples = coalesced.length ? coalesced.map((c) => at(c.clientX, c.clientY)) : [[x, y] as [number, number]];
+    return { x, y, scale: 1 / v.zoom, samples, event: e };
   };
 
   const local = (e: React.PointerEvent<HTMLCanvasElement>) => {

@@ -146,7 +146,8 @@ export function SettingsPanel(p: Props) {
         ) : (
           <p className="muted small">
             → / Space next · ← back · A all · R restart · O whole canvas · + − zoom · L lock zoom · F full screen · Esc exit.
-            A stylus always draws the laser; fingers tap to advance.
+            P laser · D pen · M highlighter · C clear writing · ⌘/Ctrl+Z undo writing · K pause recording.
+            A stylus draws with the chosen tool (laser by default); fingers tap to advance.
           </p>
         )}
       </details>

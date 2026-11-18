@@ -5,7 +5,7 @@ import { hitItem } from "../render/hit";
 import { usedStages, type Animation, type Steps } from "../lesson/reveal";
 import { CanvasView, ZOOM_STEP, zoomAt } from "./CanvasView";
 import { IconButton } from "./icons";
-import { drawLasers, laserAlpha, type LaserStroke } from "../render/laser";
+import { drawInk, drawLasers, laserAlpha, type InkStroke, type LaserStroke } from "../render/laser";
 import { downloadBlob } from "../lesson/export";
 import { canRecord, formatTime, Recorder, videoExtension } from "./recorder";
 import { useSettings } from "./settings";
@@ -51,6 +51,13 @@ const M = 16;
 const TOP = 8;
 const BOTTOM = 56;
 
+type Tool = "tap" | "laser" | "pen" | "highlighter";
+const PEN_COLORS = ["#e5353b", "#1e66f5", "#1b1b1f", "#16a34a"];
+const MARKER_COLORS = ["#ffd400", "#7cfc00", "#00e5ff", "#ff6ec7"];
+// Screen px at the zoom the stroke was drawn at; the ink then zooms with the notes.
+const PEN_PX = 3;
+const MARKER_PX = 18;
+
 function union(items: CanvasItem[]): Bounds | null {
   if (!items.length) return null;
   const b = { ...items[0].bounds };
@@ -87,8 +94,23 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Tapes peeled back this session (never saved, as in XNotes).
   const [peeled, setPeeled] = useState<Set<TapeItem>>(() => new Set());
-  // Laser: a stylus always draws it; laserOn lets a finger or mouse draw it too.
-  const [laserOn, setLaserOn] = useState(false);
+  // Tools: "tap" advances; laser fades; pen and highlighter stay until cleared (never saved).
+  // A stylus always draws (the laser while on tap); once one is used, fingers keep tapping.
+  const [tool, setTool] = useState<Tool>("tap");
+  const [penSeen, setPenSeen] = useState(false);
+  const [inkColors, setInkColors] = useState({ pen: PEN_COLORS[0], highlighter: MARKER_COLORS[0] });
+  const ink = useRef<InkStroke[]>([]);
+  const inking = useRef<InkStroke | null>(null);
+  const [inkCount, setInkCount] = useState(0);
+  const pickTool = useCallback((t: Tool) => setTool((cur) => (cur === t ? "tap" : t)), []);
+  const clearInk = useCallback(() => {
+    ink.current = [];
+    setInkCount(0);
+  }, []);
+  const undoInk = useCallback(() => {
+    ink.current = ink.current.slice(0, -1);
+    setInkCount(ink.current.length);
+  }, []);
   const lasers = useRef<LaserStroke[]>([]);
   const drawing = useRef<LaserStroke | null>(null);
   const [, setLaserTick] = useState(0);
@@ -365,7 +387,8 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const restart = useCallback(() => {
     stopReveal();
     setPos(0);
-  }, []);
+    clearInk();
+  }, [clearInk]);
   const showOverview = useCallback(() => overview && animateTo(overview), [overview, animateTo]);
   /** XNotes' fit width / fit height, of the page in view (notebooks) or the whole canvas. */
   const fitAxis = useCallback(
@@ -428,6 +451,11 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        undoInk();
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.shiftKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
         e.preventDefault();
@@ -444,7 +472,10 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         case "w": case "W": fitAxis("width"); break;
         case "h": case "H": fitAxis("height"); break;
         case "l": case "L": setZoomLocked((z) => !z); break;
-        case "p": case "P": setLaserOn((on) => !on); break;
+        case "p": case "P": pickTool("laser"); break;
+        case "d": case "D": pickTool("pen"); break;
+        case "m": case "M": pickTool("highlighter"); break;
+        case "c": case "C": clearInk(); break;
         case "k": case "K": togglePause(); break;
         case "+": case "=": zoomBy(ZOOM_STEP); break;
         case "-": case "_": zoomBy(1 / ZOOM_STEP); break;
@@ -453,7 +484,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [next, prev, all, restart, showOverview, onExit, goPage, zoomBy, fitAxis, togglePause]);
+  }, [next, prev, all, restart, showOverview, onExit, goPage, zoomBy, fitAxis, togglePause, pickTool, clearInk, undoInk]);
 
   return (
     <div className={"presenter" + (recording ? " recording" : "")} ref={rootRef}>
@@ -469,27 +500,45 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         onSize={(w, h) => setSize({ w, h })}
         onDown={(c) => {
           setSettingsOpen(false);
-          if (c.event.pointerType === "pen" || laserOn) {
+          const kind = c.event.pointerType;
+          if (kind === "pen" && !penSeen) setPenSeen(true);
+          const fingersTap = settings.stylus === "always" || (settings.stylus === "auto" && (penSeen || kind === "pen"));
+          const use: Tool = kind === "pen" ? (tool === "tap" ? "laser" : tool) : kind === "touch" && fingersTap ? "tap" : tool;
+          if (use === "laser") {
             drawing.current = { pts: [[c.x, c.y]], liftedAt: null, color: settings.laserColor };
             lasers.current.push(drawing.current);
             runLaser();
             return;
           }
+          if (use === "pen" || use === "highlighter") {
+            inking.current = { kind: use, pts: [[c.x, c.y]], color: inkColors[use], width: (use === "pen" ? PEN_PX : MARKER_PX) * c.scale };
+            ink.current = [...ink.current, inking.current];
+            setInkCount(ink.current.length);
+            return;
+          }
           downAt.current = { x: c.event.clientX, y: c.event.clientY };
         }}
         onMove={(c) => {
-          const s = drawing.current;
+          const s = drawing.current ?? inking.current;
           if (!s) return;
-          const [lx, ly] = s.pts[s.pts.length - 1];
-          if (Math.hypot(c.x - lx, c.y - ly) / c.scale >= 1.5) s.pts.push([c.x, c.y]);
-          runLaser();
+          for (const [x, y] of c.samples) {
+            const [lx, ly] = s.pts[s.pts.length - 1];
+            if (Math.hypot(x - lx, y - ly) / c.scale >= 0.75) s.pts.push([x, y]);
+          }
+          if (drawing.current) runLaser();
+          else setLaserTick((t) => t + 1);
         }}
         onCancel={() => {
           downAt.current = null;
           if (drawing.current) drawing.current.liftedAt = performance.now();
           drawing.current = null;
+          inking.current = null;
         }}
         onUp={(c) => {
+          if (inking.current) {
+            inking.current = null;
+            return;
+          }
           if (drawing.current) {
             drawing.current.liftedAt = performance.now();
             drawing.current = null;
@@ -515,7 +564,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           if (c.event.clientX - r.left < r.width / 4) prev();
           else next();
         }}
-        cursor={laserOn ? "crosshair" : hudVisible ? "default" : "none"}
+        cursor={tool !== "tap" ? "crosshair" : hudVisible ? "default" : "none"}
         options={{
           paper,
           visible: (it) => stageOf(it) <= limit,
@@ -527,7 +576,10 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
             const p = Math.min(1, Math.max(0, (performance.now() - r.start - s[0]) / Math.max(1, s[1] - s[0])));
             return { style: animation.style, p, area: r.area };
           },
-          overlay: (ctx, v) => drawLasers(ctx, v, lasers.current, performance.now(), holdMs),
+          overlay: (ctx, v) => {
+            drawInk(ctx, ink.current);
+            drawLasers(ctx, v, lasers.current, performance.now(), holdMs);
+          },
         }}
       />
       {settingsOpen && (
@@ -578,12 +630,24 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           </>
         )}
         <span className="sep" />
-        <IconButton
-          icon="pen"
-          active={laserOn}
-          onClick={() => setLaserOn((on) => !on)}
-          title={laserOn ? "Laser on: draw to point, it fades (P)" : "Laser pen for finger/mouse (P). A stylus always draws the laser."}
-        />
+        <IconButton icon="laser" active={tool === "laser"} onClick={() => pickTool("laser")} title="Laser: points, then fades (P)" />
+        <IconButton icon="pen" active={tool === "pen"} onClick={() => pickTool("pen")} title="Pen: write on the notes (D)" />
+        <IconButton icon="highlighter" active={tool === "highlighter"} onClick={() => pickTool("highlighter")} title="Highlighter (M)" />
+        {(tool === "pen" || tool === "highlighter") && (
+          <span className="swatches small">
+            {(tool === "pen" ? PEN_COLORS : MARKER_COLORS).map((c) => (
+              <button
+                key={c}
+                className={c === inkColors[tool] ? "on" : ""}
+                style={{ background: c }}
+                onClick={() => setInkColors((s) => ({ ...s, [tool]: c }))}
+                aria-label={`Colour ${c}`}
+              />
+            ))}
+          </span>
+        )}
+        {inkCount > 0 && <IconButton icon="trash" onClick={clearInk} title="Clear your writing (C) · undo last: ⌘/Ctrl+Z" />}
+        <span className="sep" />
         <IconButton icon="fullscreen" onClick={toggleFullscreen} title="Full screen (F)" />
         {recordName && canRecord() && !recording && (
           <IconButton icon="record" className="rec" onClick={startRecording} disabled={rec === "mic"} title="Record a video with your voice" />

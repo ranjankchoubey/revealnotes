@@ -23,6 +23,49 @@ export function laserAlpha(s: LaserStroke, now: number, holdMs: number): number 
   return t <= 0 ? 1 : Math.max(0, 1 - t / FADE_MS);
 }
 
+/** A smooth curve through every point of [pts] (Catmull-Rom as cubic Béziers), so a fast circle stays round. */
+export function tracePath(ctx: CanvasRenderingContext2D, pts: [number, number][]) {
+  const n = pts.length;
+  if (!n) return;
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  if (n === 1) return ctx.lineTo(pts[0][0] + 0.01, pts[0][1]);
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(n - 1, i + 2)];
+    ctx.bezierCurveTo(
+      p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6,
+      p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6,
+      p2[0], p2[1],
+    );
+  }
+}
+
+/** Presenter annotations that stay until cleared: pen, or highlighter (wide and see-through). */
+export interface InkStroke {
+  kind: "pen" | "highlighter";
+  pts: [number, number][];
+  color: string;
+  /** Content px. */
+  width: number;
+}
+
+export function drawInk(ctx: CanvasRenderingContext2D, strokes: InkStroke[]) {
+  for (const s of strokes) {
+    if (!s.pts.length) continue;
+    ctx.save();
+    ctx.lineCap = ctx.lineJoin = "round";
+    ctx.globalAlpha = s.kind === "highlighter" ? 0.35 : 1;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = s.width;
+    ctx.beginPath();
+    tracePath(ctx, s.pts);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 /**
  * Laser trail in XNotes' neon style (core/model/Stroke.kt paintNeon): a wide faint bloom, a tighter
  * bright bloom, the body lifted toward white, and a thin white-hot core. Width is constant on screen.
@@ -36,8 +79,7 @@ export function drawLasers(ctx: CanvasRenderingContext2D, view: View, strokes: L
     ctx.save();
     ctx.lineCap = ctx.lineJoin = "round";
     ctx.beginPath();
-    s.pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-    if (s.pts.length === 1) ctx.lineTo(s.pts[0][0] + 0.01, s.pts[0][1]);
+    tracePath(ctx, s.pts);
     const pass = (color: string, width: number, alpha: number, blurPx: number) => {
       ctx.globalAlpha = a * alpha;
       ctx.strokeStyle = color;
