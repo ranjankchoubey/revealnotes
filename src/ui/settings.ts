@@ -24,14 +24,19 @@ export interface Settings {
 export type PresenterSettings = Pick<Settings, "cameraFollow" | "laserSeconds" | "laserColor">;
 
 const KEY = "revealnotes:settings";
+const VERSION = 2;
 const DEFAULTS: Settings = {
-  cameraFollow: true, laserSeconds: 2, laserColor: "#ff3b3b", stylus: "auto", stylusSeen: false, selectTool: "lasso", selectMode: "touch", badges: true, embedPresenter: true,
+  cameraFollow: true, laserSeconds: 2, laserColor: "#ff3b3b", stylus: "always", stylusSeen: false, selectTool: "lasso", selectMode: "touch", badges: true, embedPresenter: true,
 };
 export const LASER_COLORS = ["#ff3b3b", "#2ee66b", "#2e9bff", "#ffd400"];
 
 function load(): Settings {
   try {
-    return { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<Settings>) };
+    const saved = JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<Settings> & { v?: number };
+    // Older versions saved the then-default "auto" stylus with every change; let the new default win.
+    if ((saved.v ?? 1) < 2 && saved.stylus === "auto") delete saved.stylus;
+    delete saved.v;
+    return { ...DEFAULTS, ...saved };
   } catch {
     return DEFAULTS;
   }
@@ -43,7 +48,7 @@ let current = typeof localStorage === "undefined" ? DEFAULTS : load();
 export function setSettings(patch: Partial<Settings>) {
   current = { ...current, ...patch };
   try {
-    localStorage.setItem(KEY, JSON.stringify(current));
+    localStorage.setItem(KEY, JSON.stringify({ ...current, v: VERSION }));
   } catch {
     // Preferences only.
   }
