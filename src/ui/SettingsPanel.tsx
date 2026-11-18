@@ -145,7 +145,7 @@ export function SettingsPanel(p: Props) {
           </p>
         ) : (
           <p className="muted small">
-            → / Space next · ← back · A all · R restart · O whole canvas · + − zoom · L lock zoom · F full screen · Esc exit.
+            → / Space next · ← back · A all · R restart · W fit width · H fit height · O whole canvas · + − zoom · L lock zoom · F full screen · Esc exit.
             P laser · D pen · M highlighter · C clear writing · ⌘/Ctrl+Z undo writing · K pause recording.
             A stylus draws with the chosen tool (laser by default); fingers tap to advance and drag to scroll.
           </p>

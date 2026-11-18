@@ -100,6 +100,9 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const [hudVisible, setHudVisible] = useState(true);
   const [caption, setCaption] = useState<string | null>(null);
   const [zoomLocked, setZoomLocked] = useState(false);
+  const [fitOpen, setFitOpen] = useState(false);
+  // The user zoomed, panned or fitted: steps keep that zoom and only scroll new content into view.
+  const manualView = useRef(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const captionTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const anim = useRef(0);
@@ -263,18 +266,19 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const overview = useMemo(() => (size.w > 0 ? fitView(doc.bounds, size.w, size.h, M, TOP, BOTTOM) : null), [doc, size]);
   const follow = !!overview && settings.cameraFollow && overview.zoom < READABLE_ZOOM;
 
-  /** Where the camera should be to show step [p], moving as little as possible from [cur]. */
+  /** Where the camera should be to show step [p], moving as little as possible from [cur]; [keep] holds the user's zoom. */
   const viewFor = useCallback(
-    (p: number, cur: View | null): View | null => {
+    (p: number, cur: View | null, keep = false): View | null => {
       if (!overview) return null;
-      if (!follow) return overview;
+      if (keep && cur && !settings.cameraFollow) return cur;
+      if (!follow && !(keep && cur)) return overview;
       const { w, h } = size;
       const whole = doc.bounds;
       const wholeW = whole.maxX - whole.minX;
       const base = Math.min(MAX_FOLLOW_ZOOM, Math.max(overview.zoom, (w - 2 * M) / Math.max(1, wholeW)));
       const target = union(doc.items.filter((it) => stageOf(it) === (p === 0 ? 0 : steps[p - 1])));
       const t = target ?? { minX: whole.minX, minY: whole.minY, maxX: whole.maxX, maxY: whole.minY + (h - TOP - BOTTOM) / base };
-      const zoom = Math.min(base, fitView(t, w, h, M, TOP, BOTTOM).zoom);
+      const zoom = keep && cur ? cur.zoom : Math.min(base, fitView(t, w, h, M, TOP, BOTTOM).zoom);
       const fitsWide = wholeW * zoom <= w - 2 * M;
       const cx = fitsWide ? (whole.minX + whole.maxX) / 2 : (t.minX + t.maxX) / 2;
       const scrollX = cx - w / (2 * zoom);
@@ -293,7 +297,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
       const availH = h - TOP - BOTTOM;
       return { zoom, scrollX, scrollY: (t.minY + t.maxY) / 2 - (TOP + availH / 2) / zoom };
     },
-    [overview, follow, size, doc, stageOf, steps],
+    [overview, follow, size, doc, stageOf, steps, settings.cameraFollow],
   );
 
   const animateTo = useCallback(
@@ -328,8 +332,8 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   useEffect(() => {
     const resized = lastSize.current !== size;
     lastSize.current = size;
-    const v = viewFor(pos, resized ? null : viewRef.current);
-    if (!v) return;
+    const v = viewFor(pos, resized ? null : viewRef.current, !resized && manualView.current);
+    if (!v || v === viewRef.current) return;
     if (resized || !viewRef.current) setView(v);
     else animateTo(v);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -410,15 +414,21 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
     setPos(0);
     clearInk();
   }, [clearInk]);
-  const showOverview = useCallback(() => overview && animateTo(overview), [overview, animateTo]);
-  /** XNotes' fit width / fit height, of the page in view (notebooks) or the whole canvas. */
+  const showOverview = useCallback(() => {
+    manualView.current = false;
+    if (overview) animateTo(overview);
+  }, [overview, animateTo]);
+  /** XNotes' fit width / fit height / 100%, of the page in view (notebooks) or the whole canvas. */
   const fitAxis = useCallback(
-    (axis: "width" | "height") => {
+    (axis: "width" | "height" | "actual") => {
       const v = viewRef.current;
       if (!v || size.w === 0) return;
+      manualView.current = true;
       const cy = v.scrollY + size.h / (2 * v.zoom);
       const t = doc.pages?.find((pg) => cy < pg.bounds.maxY + 24)?.bounds ?? doc.bounds;
-      if (axis === "width") {
+      if (axis === "actual") {
+        animateTo(zoomAt(v, size.w / 2, size.h / 2, 1 / v.zoom));
+      } else if (axis === "width") {
         const zoom = (size.w - 2 * M) / Math.max(1, t.maxX - t.minX);
         // A notebook page starts at its top; a canvas keeps the spot in view centred.
         animateTo({ zoom, scrollX: t.minX - M / zoom, scrollY: doc.pages ? t.minY - M / zoom : cy - size.h / (2 * zoom) });
@@ -432,7 +442,9 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const zoomBy = useCallback(
     (f: number) => {
       const v = viewRef.current;
-      if (v && !zoomLocked) animateTo(zoomAt(v, size.w / 2, size.h / 2, f));
+      if (!v || zoomLocked) return;
+      manualView.current = true;
+      animateTo(zoomAt(v, size.w / 2, size.h / 2, f));
     },
     [zoomLocked, animateTo, size],
   );
@@ -448,6 +460,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
     (d: number) => {
       if (!pages) return;
       const pg = pages[Math.max(0, Math.min(pages.length - 1, pageIndex + d))];
+      manualView.current = true;
       animateTo(fitView(pg.bounds, size.w, size.h, M, TOP, BOTTOM));
     },
     [pages, pageIndex, animateTo, size],
@@ -516,12 +529,14 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         view={view}
         zoomLocked={zoomLocked}
         onView={(v) => {
+          manualView.current = true;
           cancelAnimationFrame(anim.current);
           setView(v);
         }}
         onSize={(w, h) => setSize({ w, h })}
         onDown={(c) => {
           setSettingsOpen(false);
+          setFitOpen(false);
           erasing.current = false;
           const kind = c.event.pointerType;
           if (kind === "pen" && !settings.stylusSeen) setSettings({ stylusSeen: true });
@@ -554,6 +569,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
             const dy = c.event.clientY - d.y;
             if (!d.panning && Math.hypot(dx, dy) > 8) d.panning = true;
             if (d.panning) {
+              manualView.current = true;
               cancelAnimationFrame(anim.current);
               setView({ ...d.view, scrollX: d.view.scrollX - dx / d.view.zoom, scrollY: d.view.scrollY - dy / d.view.zoom });
             }
@@ -650,7 +666,15 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           <IconButton icon="stop" onClick={stopRecording} title="Stop and save the video" />
         </div>
       )}
-      <nav className={"hud" + (hudVisible || settingsOpen ? "" : " hidden")} onPointerDown={(e) => e.stopPropagation()}>
+      {fitOpen && (
+        <div className="menu fitmenu" onPointerDown={(e) => e.stopPropagation()}>
+          <button onClick={() => { setFitOpen(false); fitAxis("width"); }}>Fit width <kbd>W</kbd></button>
+          <button onClick={() => { setFitOpen(false); fitAxis("height"); }}>Fit height <kbd>H</kbd></button>
+          <button onClick={() => { setFitOpen(false); showOverview(); }}>Whole canvas <kbd>O</kbd></button>
+          <button onClick={() => { setFitOpen(false); fitAxis("actual"); }}>100%</button>
+        </div>
+      )}
+      <nav className={"hud" + (hudVisible || settingsOpen || fitOpen ? "" : " hidden")} onPointerDown={(e) => e.stopPropagation()}>
         {onExit && <IconButton icon="close" onClick={onExit} title={exitTitle} />}
         <IconButton icon="prev" onClick={prev} disabled={pos === 0} title="Previous (←)" />
         <div className="dots" title={`${pos} of ${steps.length} steps shown`}>
@@ -669,7 +693,11 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         <IconButton icon="zoomOut" onClick={() => zoomBy(1 / ZOOM_STEP)} disabled={zoomLocked} title="Zoom out (−)" />
         <IconButton icon="zoomIn" onClick={() => zoomBy(ZOOM_STEP)} disabled={zoomLocked} title="Zoom in (+)" />
         <IconButton icon={zoomLocked ? "lock" : "unlock"} active={zoomLocked} onClick={() => setZoomLocked((z) => !z)} title={zoomLocked ? "Unlock zoom (L)" : "Lock zoom (L)"} />
-        <IconButton icon="fit" onClick={showOverview} title="Whole canvas (O)" />
+        <div className="fitwrap">
+          <button className="pct" onClick={() => { setSettingsOpen(false); setFitOpen((o) => !o); }} title="Fit width, fit height, whole canvas">
+            {view ? Math.round(view.zoom * 100) : 100}%
+          </button>
+        </div>
         {pages && (
           <>
             <span className="sep" />
@@ -702,7 +730,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         {recordName && canRecord() && !recording && (
           <IconButton icon="record" className="rec" onClick={startRecording} disabled={rec === "mic"} title="Record a video with your voice" />
         )}
-        <IconButton icon="gear" active={settingsOpen} onClick={() => setSettingsOpen((o) => !o)} title="Settings" />
+        <IconButton icon="gear" active={settingsOpen} onClick={() => { setFitOpen(false); setSettingsOpen((o) => !o); }} title="Settings" />
       </nav>
     </div>
   );

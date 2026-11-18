@@ -246,6 +246,7 @@ kbd { font: inherit; font-size: 11px; color: var(--muted); border: 1px solid var
   transition: opacity 0.3s;
 }
 .hud.hidden { opacity: 0; pointer-events: none; }
+.presenter .fitmenu { position: fixed; top: auto; bottom: calc(var(--btn) + 28px); }
 .hud .sep { width: 1px; align-self: stretch; margin: 6px 2px; background: var(--border); }
 .dots { display: flex; gap: 6px; padding: 0 8px; align-items: center; }
 .dots span:not(.muted):not(.count) { width: 9px; height: 9px; border-radius: 50%; background: var(--border); cursor: pointer; }
