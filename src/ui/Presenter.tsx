@@ -51,12 +51,27 @@ const M = 16;
 const TOP = 8;
 const BOTTOM = 56;
 
-type Tool = "tap" | "laser" | "pen" | "highlighter";
+type Tool = "tap" | "laser" | "pen" | "highlighter" | "eraser";
 const PEN_COLORS = ["#e5353b", "#1e66f5", "#1b1b1f", "#16a34a"];
 const MARKER_COLORS = ["#ffd400", "#7cfc00", "#00e5ff", "#ff6ec7"];
 // Screen px at the zoom the stroke was drawn at; the ink then zooms with the notes.
 const PEN_PX = 3;
 const MARKER_PX = 18;
+
+function distanceToSegmentSquared(x: number, y: number, a: [number, number], b: [number, number]) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const length = dx * dx + dy * dy;
+  const t = length ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / length)) : 0;
+  return (x - (a[0] + t * dx)) ** 2 + (y - (a[1] + t * dy)) ** 2;
+}
+
+function inkTouchesPoint(stroke: InkStroke, x: number, y: number, radius: number) {
+  const r = radius + stroke.width / 2;
+  const limit = r * r;
+  if (stroke.pts.length === 1) return distanceToSegmentSquared(x, y, stroke.pts[0], stroke.pts[0]) <= limit;
+  return stroke.pts.slice(1).some((point, i) => distanceToSegmentSquared(x, y, stroke.pts[i], point) <= limit);
+}
 
 function union(items: CanvasItem[]): Bounds | null {
   if (!items.length) return null;
@@ -101,6 +116,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const [inkColors, setInkColors] = useState({ pen: PEN_COLORS[0], highlighter: MARKER_COLORS[0] });
   const ink = useRef<InkStroke[]>([]);
   const inking = useRef<InkStroke | null>(null);
+  const erasing = useRef(false);
   const [inkCount, setInkCount] = useState(0);
   const pickTool = useCallback((t: Tool) => setTool((cur) => (cur === t ? "tap" : t)), []);
   const clearInk = useCallback(() => {
@@ -110,6 +126,12 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const undoInk = useCallback(() => {
     ink.current = ink.current.slice(0, -1);
     setInkCount(ink.current.length);
+  }, []);
+  const eraseInk = useCallback((x: number, y: number, scale: number) => {
+    const remaining = ink.current.filter((stroke) => !inkTouchesPoint(stroke, x, y, 12 * scale));
+    if (remaining.length === ink.current.length) return;
+    ink.current = remaining;
+    setInkCount(remaining.length);
   }, []);
   const lasers = useRef<LaserStroke[]>([]);
   const drawing = useRef<LaserStroke | null>(null);
@@ -475,6 +497,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         case "p": case "P": pickTool("laser"); break;
         case "d": case "D": pickTool("pen"); break;
         case "m": case "M": pickTool("highlighter"); break;
+        case "e": case "E": pickTool("eraser"); break;
         case "c": case "C": clearInk(); break;
         case "k": case "K": togglePause(); break;
         case "+": case "=": zoomBy(ZOOM_STEP); break;
@@ -500,6 +523,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         onSize={(w, h) => setSize({ w, h })}
         onDown={(c) => {
           setSettingsOpen(false);
+          erasing.current = false;
           const kind = c.event.pointerType;
           if (kind === "pen" && !penSeen) setPenSeen(true);
           const fingersTap = settings.stylus === "always" || (settings.stylus === "auto" && (penSeen || kind === "pen"));
@@ -508,6 +532,11 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
             drawing.current = { pts: [[c.x, c.y]], liftedAt: null, color: settings.laserColor };
             lasers.current.push(drawing.current);
             runLaser();
+            return;
+          }
+          if (use === "eraser") {
+            erasing.current = true;
+            eraseInk(c.x, c.y, c.scale);
             return;
           }
           if (use === "pen" || use === "highlighter") {
@@ -519,6 +548,10 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           downAt.current = { x: c.event.clientX, y: c.event.clientY };
         }}
         onMove={(c) => {
+          if (erasing.current) {
+            for (const [x, y] of c.samples) eraseInk(x, y, c.scale);
+            return;
+          }
           const s = drawing.current ?? inking.current;
           if (!s) return;
           for (const [x, y] of c.samples) {
@@ -530,11 +563,16 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         }}
         onCancel={() => {
           downAt.current = null;
+          erasing.current = false;
           if (drawing.current) drawing.current.liftedAt = performance.now();
           drawing.current = null;
           inking.current = null;
         }}
         onUp={(c) => {
+          if (erasing.current) {
+            erasing.current = false;
+            return;
+          }
           if (inking.current) {
             inking.current = null;
             return;
@@ -633,6 +671,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         <IconButton icon="laser" active={tool === "laser"} onClick={() => pickTool("laser")} title="Laser: points, then fades (P)" />
         <IconButton icon="pen" active={tool === "pen"} onClick={() => pickTool("pen")} title="Pen: write on the notes (D)" />
         <IconButton icon="highlighter" active={tool === "highlighter"} onClick={() => pickTool("highlighter")} title="Highlighter (M)" />
+        <IconButton icon="eraser" active={tool === "eraser"} onClick={() => pickTool("eraser")} title="Eraser: remove presenter marks (E)" />
         {(tool === "pen" || tool === "highlighter") && (
           <span className="swatches small">
             {(tool === "pen" ? PEN_COLORS : MARKER_COLORS).map((c) => (
