@@ -59,7 +59,7 @@ export function SettingsPanel(p: Props) {
           </div>
           <div className="row col">
             <span>Stylus: pen selects, fingers pan</span>
-            <Seg value={s.stylus} options={[["auto", "After first pen use"], ["always", "Always"], ["never", "Never"]]} onChange={(v) => set({ stylus: v })} />
+            <Seg value={s.stylus} options={[["auto", "Once a pen is used here"], ["always", "Always"], ["never", "Never"]]} onChange={(v) => set({ stylus: v })} />
           </div>
           <div className="row">
             <span>Step numbers on strokes</span>
@@ -147,7 +147,7 @@ export function SettingsPanel(p: Props) {
           <p className="muted small">
             → / Space next · ← back · A all · R restart · O whole canvas · + − zoom · L lock zoom · F full screen · Esc exit.
             P laser · D pen · M highlighter · C clear writing · ⌘/Ctrl+Z undo writing · K pause recording.
-            A stylus draws with the chosen tool (laser by default); fingers tap to advance.
+            A stylus draws with the chosen tool (laser by default); fingers tap to advance and drag to scroll.
           </p>
         )}
       </details>

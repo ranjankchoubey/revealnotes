@@ -74,8 +74,7 @@ export function Editor(p: Props) {
     [doc],
   );
   // Once a stylus is used (auto mode), the pen selects and a finger pans, like XNotes.
-  const [penSeen, setPenSeen] = useState(false);
-  const fingerPans = settings.stylus === "always" || (settings.stylus === "auto" && penSeen);
+  const fingerPans = settings.stylus === "always" || (settings.stylus === "auto" && settings.stylusSeen);
   const drag = useRef<{ x: number; y: number; moved: boolean; hit: CanvasItem | null; ring: [number, number][] } | null>(null);
 
   const steps = useMemo(() => {
@@ -380,7 +379,7 @@ export function Editor(p: Props) {
           onDown={(c) => {
             setListOpen(false);
             setSettingsOpen(false);
-            if (c.event.pointerType === "pen") setPenSeen(true);
+            if (c.event.pointerType === "pen" && !settings.stylusSeen) setSettings({ stylusSeen: true });
             drag.current = { x: c.x, y: c.y, moved: false, hit: pickAt(doc, c.x, c.y, 5 * c.scale), ring: [[c.x, c.y]] };
           }}
           onMove={(c) => {

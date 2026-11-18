@@ -8,7 +8,7 @@ import { IconButton } from "./icons";
 import { drawInk, drawLasers, laserAlpha, type InkStroke, type LaserStroke } from "../render/laser";
 import { downloadBlob } from "../lesson/export";
 import { canRecord, formatTime, Recorder, videoExtension } from "./recorder";
-import { useSettings } from "./settings";
+import { useSettings, setSettings } from "./settings";
 import { SettingsPanel } from "./SettingsPanel";
 
 interface Props {
@@ -103,7 +103,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const hideTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const captionTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const anim = useRef(0);
-  const downAt = useRef<{ x: number; y: number } | null>(null);
+  const downAt = useRef<{ x: number; y: number; view: View | null; panning: boolean } | null>(null);
   const limit = pos === 0 ? 0 : steps[pos - 1];
   const settings = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -112,7 +112,6 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   // Tools: "tap" advances; laser fades; pen and highlighter stay until cleared (never saved).
   // A stylus always draws (the laser while on tap); once one is used, fingers keep tapping.
   const [tool, setTool] = useState<Tool>("tap");
-  const [penSeen, setPenSeen] = useState(false);
   const [inkColors, setInkColors] = useState({ pen: PEN_COLORS[0], highlighter: MARKER_COLORS[0] });
   const ink = useRef<InkStroke[]>([]);
   const inking = useRef<InkStroke | null>(null);
@@ -525,8 +524,8 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           setSettingsOpen(false);
           erasing.current = false;
           const kind = c.event.pointerType;
-          if (kind === "pen" && !penSeen) setPenSeen(true);
-          const fingersTap = settings.stylus === "always" || (settings.stylus === "auto" && (penSeen || kind === "pen"));
+          if (kind === "pen" && !settings.stylusSeen) setSettings({ stylusSeen: true });
+          const fingersTap = settings.stylus === "always" || (settings.stylus === "auto" && (settings.stylusSeen || kind === "pen"));
           const use: Tool = kind === "pen" ? (tool === "tap" ? "laser" : tool) : kind === "touch" && fingersTap ? "tap" : tool;
           if (use === "laser") {
             drawing.current = { pts: [[c.x, c.y]], liftedAt: null, color: settings.laserColor };
@@ -545,9 +544,21 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
             setInkCount(ink.current.length);
             return;
           }
-          downAt.current = { x: c.event.clientX, y: c.event.clientY };
+          downAt.current = { x: c.event.clientX, y: c.event.clientY, view: viewRef.current, panning: false };
         }}
         onMove={(c) => {
+          const d = downAt.current;
+          if (d?.view) {
+            // A tap advances; a drag scrolls the notes, as one finger does everywhere else.
+            const dx = c.event.clientX - d.x;
+            const dy = c.event.clientY - d.y;
+            if (!d.panning && Math.hypot(dx, dy) > 8) d.panning = true;
+            if (d.panning) {
+              cancelAnimationFrame(anim.current);
+              setView({ ...d.view, scrollX: d.view.scrollX - dx / d.view.zoom, scrollY: d.view.scrollY - dy / d.view.zoom });
+            }
+            return;
+          }
           if (erasing.current) {
             for (const [x, y] of c.samples) eraseInk(x, y, c.scale);
             return;
