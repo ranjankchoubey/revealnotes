@@ -136,6 +136,18 @@ export function SettingsPanel(p: Props) {
           <Seg value={s.embedPresenter ? "on" : "off"} options={[["on", "On"], ["off", "Off"]]} onChange={(v) => set({ embedPresenter: v === "on" })} />
         </div>
       )}
+      {p.onExport && (
+        <div className="row">
+          <span title="Shown in the top-right corner while presenting, in recorded videos and in exported files. Empty = none.">Watermark</span>
+          <input
+            className="watermark"
+            value={s.watermark}
+            maxLength={40}
+            placeholder="@yourchannel"
+            onChange={(e) => set({ watermark: e.target.value })}
+          />
+        </div>
+      )}
 
       <details>
         <summary>Shortcuts</summary>

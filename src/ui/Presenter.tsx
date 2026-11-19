@@ -24,6 +24,8 @@ interface Props {
   /** Offers video recording, saving as "<name> <date>.mp4"; omitted in exported lessons. */
   recordName?: string;
   exitTitle?: string;
+  /** Drawn on the canvas, so recorded videos carry it too. */
+  watermark?: string;
 }
 
 type FsDoc = Document & { webkitFullscreenElement?: Element; webkitExitFullscreen?: () => void };
@@ -85,7 +87,19 @@ function union(items: CanvasItem[]): Bounds | null {
   return b;
 }
 
-export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, onAnimation, recordName, exitTitle = "Back to editing (Esc)" }: Props) {
+function drawWatermark(ctx: CanvasRenderingContext2D, text: string, cssWidth: number) {
+  const dpr = ctx.canvas.width / Math.max(1, cssWidth);
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.font = "600 16px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "rgba(128, 128, 128, 0.6)";
+  ctx.fillText(text, cssWidth - 14, 12);
+  ctx.restore();
+}
+
+export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, onAnimation, recordName, exitTitle = "Back to editing (Esc)", watermark }: Props) {
   const stageOf = useMemo(() => {
     const m = new Map<CanvasItem, number>(doc.items.map((it, i) => [it, lesson.stages.get(ids[i]) ?? 0]));
     return (it: CanvasItem) => m.get(it) ?? 0;
@@ -644,6 +658,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           overlay: (ctx, v) => {
             drawInk(ctx, ink.current);
             drawLasers(ctx, v, lasers.current, performance.now(), holdMs);
+            if (watermark?.trim()) drawWatermark(ctx, watermark.trim(), size.w);
           },
         }}
       />

@@ -18,6 +18,8 @@ export interface Settings {
   badges: boolean;
   /** Exported lessons start with this device's presenter settings (camera follow, laser). */
   embedPresenter: boolean;
+  /** Text in the top-right corner while presenting, recording and in exported files; "" = none. */
+  watermark: string;
 }
 
 /** The settings an exported lesson carries. */
@@ -27,6 +29,7 @@ const KEY = "revealnotes:settings";
 const VERSION = 2;
 const DEFAULTS: Settings = {
   cameraFollow: true, laserSeconds: 2, laserColor: "#ff3b3b", stylus: "always", stylusSeen: false, selectTool: "lasso", selectMode: "touch", badges: true, embedPresenter: true,
+  watermark: "@ranjankchoubey",
 };
 export const LASER_COLORS = ["#ff3b3b", "#2ee66b", "#2e9bff", "#ffd400"];
 

@@ -58,6 +58,10 @@ body { -webkit-touch-callout: none; touch-action: manipulation; }
 .settings .row.actions { justify-content: flex-start; flex-wrap: wrap; }
 .settings details { border-top: 1px solid var(--border); padding-top: 8px; }
 .settings summary { cursor: pointer; color: var(--muted); }
+.settings input.watermark {
+  width: 160px; min-width: 0; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font: inherit;
+}
 
 /* Confirm dialog (a steps file that looks made for other notes) */
 .modal-back { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(0, 0, 0, 0.35); padding: 16px; }

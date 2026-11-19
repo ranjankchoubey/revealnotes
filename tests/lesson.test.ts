@@ -6,6 +6,33 @@ import { objectIds } from "../src/lesson/ids";
 import { applyReveal, compactStages, newLesson, serializeReveal } from "../src/lesson/reveal";
 import { ringInside, ringMembers } from "../src/render/hit";
 import { revealNameFor } from "../src/lesson/storage";
+import { decodeView, encodeView, fromView, toView } from "../src/lesson/viewdoc";
+
+describe("view-only export data", () => {
+  test("round-trips drawing data and steps without the source JSON", async () => {
+    const bytes = new Uint8Array(readFileSync(new URL("./fixtures/untitled_2.xnote", import.meta.url).pathname));
+    const doc = await loadDocument("untitled_2.xnote", bytes);
+    const ids = objectIds(doc);
+    const lesson = newLesson(ids);
+    ids.forEach((id, i) => lesson.stages.set(id, i % 3));
+    lesson.names.set(2, "Second");
+    const view = decodeView(encodeView(toView(doc, bytes, ids, lesson)));
+    expect(JSON.stringify(view)).not.toContain('"raw"');
+    const back = fromView("untitled_2.xnote", view);
+    expect(back.doc.items.length).toBe(doc.items.length);
+    expect(back.doc.items.map((it) => it.kind)).toEqual(doc.items.map((it) => it.kind));
+    expect([...back.lesson.stages.values()]).toEqual(ids.map((_, i) => i % 3));
+    expect(back.lesson.names.get(2)).toBe("Second");
+    const s0 = doc.items.find((it) => it.kind === "stroke")!;
+    const s1 = back.doc.items[doc.items.indexOf(s0)];
+    if (s0.kind !== "stroke" || s1.kind !== "stroke") throw new Error("expected strokes");
+    expect(s1.ribbon.centers).toBeInstanceOf(Float64Array);
+    expect(s1.ribbon.centers.length).toBe(s0.ribbon.centers.length);
+    expect(s1.ribbon.centers[0]).toBeCloseTo(s0.ribbon.centers[0], 2);
+    expect(s1.ribbon.centers.at(-1)!).toBeCloseTo(s0.ribbon.centers.at(-1)!, 2);
+    expect(s1.ribbon.halfWidths.at(-1)!).toBeCloseTo(s0.ribbon.halfWidths.at(-1)!, 2);
+  });
+});
 
 describe("compactStages", () => {
   test("closes gaps, names follow their step, active step kept even when empty", () => {

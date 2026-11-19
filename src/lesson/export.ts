@@ -18,13 +18,19 @@ export interface LessonMeta {
 
 export interface EmbeddedLesson {
   name: string;
-  /** The original notes file, base64 (an .xnote's source PDF left out: [pdf] has its pages). */
-  xcanvas: string;
-  reveal: RevealFile;
+  /** The notes and their steps, ready to draw, as deflated ViewDoc JSON in base64 (no source file: view only). */
+  view?: string;
+  paper?: "light" | "dark";
+  /** Older exports: the original notes file, base64 (an .xnote's source PDF left out: [pdf] has its pages). */
+  xcanvas?: string;
+  /** Older exports: the steps, keyed by object id. */
+  reveal?: RevealFile;
   /** PDF backdrops as pictures, keyed "page:turn". */
   pdf?: Record<string, string>;
   /** The author's presenter settings, applied while this file is open. */
   presenter?: PresenterSettings;
+  /** Shown in a corner of the notes (and in videos recorded from them). */
+  watermark?: string;
 }
 
 /** The notes file without its source PDF (the export carries the pages as pictures instead). */
@@ -61,6 +67,11 @@ export async function buildLessonHtml(lesson: EmbeddedLesson, meta?: LessonMeta)
     return res.text();
   };
   const [js, css] = await Promise.all([get("player.js"), get("player.css")]);
+  return lessonHtml(lesson, js, css, meta);
+}
+
+/** The exported file around the given player bundle; view only: no text selection, callouts or printing. */
+export function lessonHtml(lesson: EmbeddedLesson, js: string, css: string, meta?: LessonMeta): string {
   // Keep inlined code from ending its own tag early or opening an HTML comment.
   const safeJs = js.replace(/<\/script/gi, "<\\/script").replace(/<!--/g, "<\\!--");
   const safeCss = css.replace(/<\/style/gi, "<\\/style");
@@ -79,6 +90,7 @@ export async function buildLessonHtml(lesson: EmbeddedLesson, meta?: LessonMeta)
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
 <title>${title}</title>
 ${metaTags}<style>${safeCss}</style>
+<style>html{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}@media print{body{display:none}}</style>
 </head>
 <body>
 <div id="root"></div>

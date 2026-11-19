@@ -7,12 +7,13 @@ import {
   type Lesson, type MatchReport, type Steps,
 } from "./lesson/reveal";
 import { openFiles, revealNameFor, saveReveal, type SaveHandle } from "./lesson/storage";
-import { buildLessonHtml, downloadText, toBase64, withoutPdf } from "./lesson/export";
+import { buildLessonHtml, downloadText } from "./lesson/export";
+import { encodeView, toView } from "./lesson/viewdoc";
 import type { PaperMode } from "./render/draw";
 import { makeThumbnail } from "./render/thumb";
 import { Editor, type SaveState } from "./ui/Editor";
 import { Presenter } from "./ui/Presenter";
-import { getSettings, presenterSettings } from "./ui/settings";
+import { getSettings, presenterSettings, useSettings } from "./ui/settings";
 
 interface Loaded {
   doc: CanvasDoc;
@@ -47,6 +48,7 @@ interface Doubt {
 }
 
 export function App() {
+  const { watermark } = useSettings();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [lesson, setLesson] = useState<Lesson | null>(null);
   const [history, setHistory] = useState<Steps[]>([]);
@@ -174,10 +176,11 @@ export function App() {
       const html = await buildLessonHtml(
         {
           name: doc.fileName,
-          xcanvas: toBase64(doc.pdfBytes ? withoutPdf(loaded.bytes) : loaded.bytes),
-          reveal: serializeReveal(doc, loaded.ids, lesson, false),
+          view: encodeView(toView(doc, loaded.bytes, loaded.ids, lesson)),
+          paper: lesson.paper,
           pdf: doc.pdf && doc.pdfBytes ? await pdfPictures(doc) : undefined,
           presenter: getSettings().embedPresenter ? presenterSettings() : undefined,
+          watermark: getSettings().watermark.trim() || undefined,
         },
         {
           title,
@@ -253,6 +256,7 @@ export function App() {
         onAnimation={(animation) => update({ animation }, false)}
         onExit={exitPresent}
         recordName={loaded.doc.fileName.replace(/\.(xcanvas|xnote)$/i, "")}
+        watermark={watermark}
       />
     );
   }
