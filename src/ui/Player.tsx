@@ -55,6 +55,7 @@ export function Player({ data }: { data: EmbeddedLesson }) {
       exitTitle="Back to the notes (Esc)"
       watermark={data.watermark}
       watermarkLink
+      startAt={1}
     />
   );
 }

@@ -28,6 +28,8 @@ interface Props {
   watermark?: string;
   /** Exported files: the watermark is a link to the YouTube channel instead (nothing is recorded there). */
   watermarkLink?: boolean;
+  /** Steps already shown on opening (exported files start at 1, so viewers never see a blank page). */
+  startAt?: number;
 }
 
 type FsDoc = Document & { webkitFullscreenElement?: Element; webkitExitFullscreen?: () => void };
@@ -121,7 +123,7 @@ function drawWatermark(ctx: CanvasRenderingContext2D, text: string, cssWidth: nu
   ctx.restore();
 }
 
-export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, onAnimation, recordName, exitTitle = "Back to editing (Esc)", watermark, watermarkLink }: Props) {
+export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, onAnimation, recordName, exitTitle = "Back to editing (Esc)", watermark, watermarkLink, startAt = 0 }: Props) {
   const mark = watermark?.trim() ?? "";
   const stageOf = useMemo(() => {
     const m = new Map<CanvasItem, number>(doc.items.map((it, i) => [it, lesson.stages.get(ids[i]) ?? 0]));
@@ -129,7 +131,8 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   }, [doc, ids, lesson]);
   const steps = useMemo(() => usedStages(lesson.stages), [lesson]);
   // pos 0 = only "Always" objects; pos k = everything up to steps[k-1].
-  const [pos, setPos] = useState(0);
+  const first = Math.min(startAt, steps.length);
+  const [pos, setPos] = useState(first);
   const [view, setView] = useState<View | null>(null);
   const viewRef = useRef<View | null>(null);
   viewRef.current = view;
@@ -453,9 +456,9 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   }, [steps]);
   const restart = useCallback(() => {
     stopReveal();
-    setPos(0);
+    setPos(first);
     clearInk();
-  }, [clearInk]);
+  }, [clearInk, first]);
   const showOverview = useCallback(() => {
     manualView.current = false;
     if (overview) animateTo(overview);
