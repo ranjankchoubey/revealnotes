@@ -26,6 +26,8 @@ interface Props {
   exitTitle?: string;
   /** Drawn on the canvas, so recorded videos carry it too. */
   watermark?: string;
+  /** Exported files: the watermark is a link to the YouTube channel instead (nothing is recorded there). */
+  watermarkLink?: boolean;
 }
 
 type FsDoc = Document & { webkitFullscreenElement?: Element; webkitExitFullscreen?: () => void };
@@ -87,19 +89,40 @@ function union(items: CanvasItem[]): Bounds | null {
   return b;
 }
 
+const isChannel = (s: string) => /^@[\w.-]{3,30}$/.test(s);
+
 function drawWatermark(ctx: CanvasRenderingContext2D, text: string, cssWidth: number) {
   const dpr = ctx.canvas.width / Math.max(1, cssWidth);
+  const right = cssWidth - 14;
+  const top = 12;
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = "600 16px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  if (isChannel(text)) {
+    // YouTube's mark before the handle, so viewers read it as a channel.
+    const x = right - ctx.measureText(text).width - 30;
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = "#ff0033";
+    ctx.beginPath();
+    ctx.roundRect(x, top + 1, 22, 16, 4);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.moveTo(x + 9, top + 5.5);
+    ctx.lineTo(x + 9, top + 12.5);
+    ctx.lineTo(x + 15, top + 9);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
   ctx.textAlign = "right";
   ctx.textBaseline = "top";
-  ctx.fillStyle = "rgba(128, 128, 128, 0.6)";
-  ctx.fillText(text, cssWidth - 14, 12);
+  ctx.fillStyle = "rgba(128, 128, 128, 0.75)";
+  ctx.fillText(text, right, top);
   ctx.restore();
 }
 
-export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, onAnimation, recordName, exitTitle = "Back to editing (Esc)", watermark }: Props) {
+export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, onAnimation, recordName, exitTitle = "Back to editing (Esc)", watermark, watermarkLink }: Props) {
+  const mark = watermark?.trim() ?? "";
   const stageOf = useMemo(() => {
     const m = new Map<CanvasItem, number>(doc.items.map((it, i) => [it, lesson.stages.get(ids[i]) ?? 0]));
     return (it: CanvasItem) => m.get(it) ?? 0;
@@ -290,12 +313,16 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
       const whole = doc.bounds;
       const wholeW = whole.maxX - whole.minX;
       const base = Math.min(MAX_FOLLOW_ZOOM, Math.max(overview.zoom, (w - 2 * M) / Math.max(1, wholeW)));
-      const target = union(doc.items.filter((it) => stageOf(it) === (p === 0 ? 0 : steps[p - 1])));
+      // The start shows the top of the notes, even when "Always" objects are spread over many pages.
+      const target = p === 0 ? null : union(doc.items.filter((it) => stageOf(it) === steps[p - 1]));
       const t = target ?? { minX: whole.minX, minY: whole.minY, maxX: whole.maxX, maxY: whole.minY + (h - TOP - BOTTOM) / base };
-      const zoom = keep && cur ? cur.zoom : Math.min(base, fitView(t, w, h, M, TOP, BOTTOM).zoom);
+      // Never zoom out below fit width (notebooks) or readable size to fit a spread-out step: show its start instead.
+      const floor = doc.pages ? base : Math.min(base, READABLE_ZOOM);
+      const zoom = keep && cur ? cur.zoom : Math.max(floor, Math.min(base, fitView(t, w, h, M, TOP, BOTTOM).zoom));
       const fitsWide = wholeW * zoom <= w - 2 * M;
       const cx = fitsWide ? (whole.minX + whole.maxX) / 2 : (t.minX + t.maxX) / 2;
-      const scrollX = cx - w / (2 * zoom);
+      const wideT = (t.maxX - t.minX) * zoom > w - 2 * M;
+      const scrollX = !fitsWide && wideT ? t.minX - M / zoom : cx - w / (2 * zoom);
       if (cur && Math.abs(cur.zoom - zoom) / zoom < 0.01) {
         // Same zoom: scroll just enough to bring the step into view, keeping the context above it.
         let scrollY = cur.scrollY;
@@ -309,7 +336,8 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         return { zoom, scrollX: sx, scrollY };
       }
       const availH = h - TOP - BOTTOM;
-      return { zoom, scrollX, scrollY: (t.minY + t.maxY) / 2 - (TOP + availH / 2) / zoom };
+      const tall = (t.maxY - t.minY) * zoom > availH - 2 * M;
+      return { zoom, scrollX, scrollY: tall ? t.minY - (TOP + M) / zoom : (t.minY + t.maxY) / 2 - (TOP + availH / 2) / zoom };
     },
     [overview, follow, size, doc, stageOf, steps, settings.cameraFollow],
   );
@@ -658,7 +686,7 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           overlay: (ctx, v) => {
             drawInk(ctx, ink.current);
             drawLasers(ctx, v, lasers.current, performance.now(), holdMs);
-            if (watermark?.trim()) drawWatermark(ctx, watermark.trim(), size.w);
+            if (mark && !watermarkLink) drawWatermark(ctx, mark, size.w);
           },
         }}
       />
@@ -666,6 +694,12 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
         <SettingsPanel scope="present" onClose={() => setSettingsOpen(false)} animation={onAnimation ? animation : undefined} onAnimation={onAnimation} />
       )}
       {caption && <div className="caption">{caption}</div>}
+      {mark && watermarkLink && (isChannel(mark) ? (
+        <a className="watermark" href={`https://www.youtube.com/${mark}`} target="_blank" rel="noopener" title={`${mark} on YouTube`}>
+          <svg viewBox="0 0 22 16" aria-hidden="true"><rect width="22" height="16" rx="4" fill="#ff0033" /><path d="M9 4.5v7l6-3.5z" fill="#fff" /></svg>
+          {mark}
+        </a>
+      ) : <span className="watermark">{mark}</span>)}
       {message && <div className="toast" onClick={() => setMessage(null)}>{message}</div>}
       {rec === "countdown" && <div className="countdown" key={count}>{count}</div>}
       {rec === "paused" && (

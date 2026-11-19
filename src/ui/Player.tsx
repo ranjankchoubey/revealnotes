@@ -54,6 +54,7 @@ export function Player({ data }: { data: EmbeddedLesson }) {
       onExit={fromSite ? () => window.history.back() : undefined}
       exitTitle="Back to the notes (Esc)"
       watermark={data.watermark}
+      watermarkLink
     />
   );
 }

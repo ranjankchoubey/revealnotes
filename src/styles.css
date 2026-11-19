@@ -251,6 +251,12 @@ kbd { font: inherit; font-size: 11px; color: var(--muted); border: 1px solid var
 }
 .hud.hidden { opacity: 0; pointer-events: none; }
 .presenter .fitmenu { position: fixed; top: auto; bottom: calc(var(--btn) + 28px); }
+.presenter .watermark {
+  position: fixed; top: 10px; right: 14px; z-index: 2; display: inline-flex; align-items: center; gap: 8px;
+  font: 600 16px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: rgba(128, 128, 128, 0.75); text-decoration: none;
+}
+.presenter a.watermark:hover { color: var(--text); }
+.presenter .watermark svg { width: 22px; height: 16px; opacity: 0.85; }
 .hud .sep { width: 1px; align-self: stretch; margin: 6px 2px; background: var(--border); }
 .dots { display: flex; gap: 6px; padding: 0 8px; align-items: center; }
 .dots span:not(.muted):not(.count) { width: 9px; height: 9px; border-radius: 50%; background: var(--border); cursor: pointer; }
