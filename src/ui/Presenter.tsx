@@ -159,6 +159,8 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
   const ink = useRef<InkStroke[]>([]);
   const inking = useRef<InkStroke | null>(null);
   const erasing = useRef(false);
+  // A stylus touched the screen since this opened: from then on fingers scroll, so a resting palm doesn't draw.
+  const penUsed = useRef(false);
   const [inkCount, setInkCount] = useState(0);
   const pickTool = useCallback((t: Tool) => setTool((cur) => (cur === t ? "tap" : t)), []);
   const clearInk = useCallback(() => {
@@ -584,8 +586,11 @@ export function Presenter({ doc, ids, steps: lesson, paper, onExit, animation, o
           setFitOpen(false);
           erasing.current = false;
           const kind = c.event.pointerType;
+          if (kind === "pen") penUsed.current = true;
           if (kind === "pen" && !settings.stylusSeen) setSettings({ stylusSeen: true });
-          const fingersTap = settings.stylus === "always" || (settings.stylus === "auto" && (settings.stylusSeen || kind === "pen"));
+          const stylusMode = settings.stylus === "always" || (settings.stylus === "auto" && (settings.stylusSeen || kind === "pen"));
+          // A picked tool works with a finger (phones, tablets without a pen) until a stylus is used.
+          const fingersTap = stylusMode && (tool === "tap" || penUsed.current);
           const use: Tool = kind === "pen" ? (tool === "tap" ? "laser" : tool) : kind === "touch" && fingersTap ? "tap" : tool;
           if (use === "laser") {
             drawing.current = { pts: [[c.x, c.y]], liftedAt: null, color: settings.laserColor };
